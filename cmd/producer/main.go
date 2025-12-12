@@ -28,7 +28,7 @@ func main() {
 
 	go func() {
 		for {
-			batch_size := 1	00_000 + time.Now().UnixNano()%1_000_000
+			batch_size := 100_000 + time.Now().UnixNano()%1_000_000
 			fmt.Printf("batch_size: %v\n", batch_size)
 			batch := make([]pkg.NetflowPacket, 0, batch_size)
 			for range batch_size {

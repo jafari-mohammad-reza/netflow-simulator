@@ -201,6 +201,28 @@ var countries = []string{"Afghanistan", "Albania",
 	"Zambia",
 	"Zimbabwe",
 }
+var countriesMap = map[int64]string{}
+
+func init() {
+	for i, country := range countries {
+		countriesMap[int64(i)] = country
+	}
+}
+func GetCountryIndex(name string) int64 {
+	for i, country := range countries {
+		if country == name {
+			return int64(i)
+		}
+	}
+	return -1
+}
+func AddCountry(name string) int64 {
+	newIndex := int64(len(countries))
+	countries = append(countries, name)
+	countriesMap[newIndex] = name
+	return newIndex
+}
+
 var ispMap = map[int64]string{
 	0: "ISP-A",
 	1: "ISP-B",
@@ -226,6 +248,19 @@ func GetRandCountry() string {
 func GetRandISP() string {
 	n := time.Now().UnixNano() % int64(len(ispMap))
 	return ispMap[n]
+}
+func GetIspIndex(isp string) int64 {
+	for i, name := range ispMap {
+		if name == isp {
+			return i
+		}
+	}
+	return -1
+}
+func AddIsp(isp string) int64 {
+	newIndex := int64(len(ispMap))
+	ispMap[newIndex] = isp
+	return newIndex
 }
 func GetRandProtocol() Protocol {
 	n := time.Now().UnixNano() % int64(len(protocolsMap))
