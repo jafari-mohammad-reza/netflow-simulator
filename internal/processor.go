@@ -45,7 +45,7 @@ type AggregatedFlow struct {
 	ICMPPacketCountUniformed float64
 	ICMPByteSumUniformed     float64
 
-	Sequence atomic.Int32
+	Sequence int
 }
 
 func (p *Processor) ProcessBucket(bucket []pkg.NetflowPacket) error {
@@ -136,8 +136,6 @@ func (p *Processor) ProcessBucket(bucket []pkg.NetflowPacket) error {
 				existing.UDPByteSum += flows.UDPByteSum
 				existing.ICMPPacketCount += flows.ICMPPacketCount
 				existing.ICMPByteSum += flows.ICMPByteSum
-				existing.Sequence.Store(p.sequence.Load() + 1)
-
 				ipMap[ip] = existing
 			}
 		}

@@ -184,7 +184,7 @@ func (t *FlowTrie) InsertMerge(flow *AggregatedFlow, isMerge bool) {
 				ICMPPacketCountUniformed := float64(flow.ICMPPacketCount) / 240 / 15
 				ICMPByteSumUniformed := float64(flow.ICMPByteSum) / 240 / 15
 
-				if flow.Sequence.Load() > 1 {
+				if flow.Sequence > 1 {
 					flow.TCPPacketCountUniformed = ((TCPPacketCountUniformed * 2) + flow.TCPPacketCountUniformed) / 3
 					flow.TCPByteSumUniformed = ((TCPByteSumUniformed * 2) + flow.TCPByteSumUniformed) / 3
 					flow.UDPPacketCountUniformed = ((UDPPacketCountUniformed * 2) + flow.UDPPacketCountUniformed) / 3
@@ -206,7 +206,7 @@ func (t *FlowTrie) InsertMerge(flow *AggregatedFlow, isMerge bool) {
 				flow.UDPByteSum = 0
 				flow.ICMPPacketCount = 0
 				flow.ICMPByteSum = 0
-				flow.Sequence.Add(1)
+				flow.Sequence += 1
 			}
 			if cur == nil {
 

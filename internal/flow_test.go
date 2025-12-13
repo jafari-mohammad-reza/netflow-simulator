@@ -4,7 +4,6 @@ import (
 	"context"
 	"net"
 	"netflow-reporter/pkg"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -76,7 +75,7 @@ func TestProcessorProcessBucket(t *testing.T) {
 }
 
 func BenchmarkProcessorProcessBucket(b *testing.B) {
-	b.ReportAllocs() // 👈 THIS
+	b.ReportAllocs()
 
 	p := NewProcessor()
 
@@ -155,7 +154,7 @@ func TestFlowTrie(t *testing.T) {
 	}
 
 	other := NewFlowTrie()
-	f4.Sequence.Store(1)
+	f4.Sequence = 1
 	other.InsertMerge(f4, false)
 	if other.Lookup(ip3) == nil {
 		t.Fatal("missing ip3 in other")
@@ -184,13 +183,11 @@ func TestFlowTrie(t *testing.T) {
 		t.Fatal("empty trie lookup failed")
 	}
 
-	seq := atomic.Int32{}
-	seq.Store(2)
 	f5 := &AggregatedFlow{
 		IP:             ip3,
 		TCPPacketCount: 240,
 		TCPByteSum:     2400,
-		Sequence:       seq,
+		Sequence:       2,
 	}
 	trie.InsertMerge(f5, true)
 	r5 := trie.Lookup(ip3)
