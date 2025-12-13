@@ -220,18 +220,20 @@ func main() {
 			builder.Add(
 				grid.RowHeightPerc(50,
 					grid.Widget(lcPackets,
-						container.Border(linestyle.Double),
+						container.Border(linestyle.Round),
+						container.BorderColor(cell.ColorBlue),
 						container.BorderTitle(" Packets (Kpps) "))),
 				grid.RowHeightPerc(50,
 					grid.Widget(lcBytes,
-						container.Border(linestyle.Double),
+						container.Border(linestyle.Round),
+						container.BorderColor(cell.ColorRed),
 						container.BorderTitle(" Traffic (GB/s) "))),
 			)
 		} else {
-
 			builder.Add(
 				grid.Widget(reportText,
-					container.Border(linestyle.Double),
+					container.Border(linestyle.Round),
+					container.BorderColor(cell.ColorCyan),
 					container.BorderTitle(" Top Flows Reports ")))
 		}
 
@@ -265,7 +267,7 @@ func main() {
 					currentView = viewCharts
 				}
 				updateContainer(c)
-			case 'q', 'Q', keyboard.KeyEsc, keyboard.KeyCtrlC, keyboard.KeyCtrlQ:
+			case 'q', 'Q', keyboard.KeyCtrlC, keyboard.KeyCtrlQ:
 				os.Exit(1)
 			}
 		}),
