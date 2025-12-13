@@ -23,8 +23,47 @@ func TestProcessorProcessBucket(t *testing.T) {
 			ByteSum:   time.Now().UnixNano() % 1_000_000,
 		})
 	}
-	if err := p.ProcessBucket(bucket); err != nil {
-		t.Fatalf("failed to process bucket: %s\n", err.Error())
+	stats := p.ProcessBucket(bucket)
+	bucketStat := FlowStats{
+		TCPPackets:  0,
+		UDPPackets:  0,
+		ICMPPackets: 0,
+		TCPBytes:    0,
+		UDPBytes:    0,
+		ICMPBytes:   0,
+	}
+	for _, packet := range bucket {
+		switch packet.Protocol {
+		case pkg.ProtocolTCP:
+			bucketStat.TCPBytes += uint64(packet.ByteSum)
+			bucketStat.TCPPackets += 1
+		case pkg.ProtocolICMP:
+			bucketStat.ICMPBytes += uint64(packet.ByteSum)
+			bucketStat.ICMPPackets += 1
+		case pkg.ProtocolUDP:
+			bucketStat.UDPBytes += uint64(packet.ByteSum)
+			bucketStat.UDPPackets += 1
+		}
+	}
+	if stats.ICMPBytes != bucketStat.ICMPBytes {
+		t.Fatalf("stats ICMPBytes does not match bucketStat: %d - %d", stats.ICMPBytes, bucketStat.ICMPBytes)
+	}
+	if stats.ICMPPackets != bucketStat.ICMPPackets {
+		t.Fatalf("stats ICMPPackets does not match bucketStat: %d - %d", stats.ICMPPackets, bucketStat.ICMPPackets)
+	}
+
+	if stats.TCPBytes != bucketStat.TCPBytes {
+		t.Fatalf("stats TCPBytes does not match bucketStat: %d - %d", stats.TCPBytes, bucketStat.TCPBytes)
+	}
+	if stats.TCPPackets != bucketStat.TCPPackets {
+		t.Fatalf("stats TCPPackets does not match bucketStat: %d - %d", stats.TCPPackets, bucketStat.TCPPackets)
+	}
+
+	if stats.TCPBytes != bucketStat.TCPBytes {
+		t.Fatalf("stats TCPBytes does not match bucketStat: %d - %d", stats.TCPBytes, bucketStat.TCPBytes)
+	}
+	if stats.TCPPackets != bucketStat.TCPPackets {
+		t.Fatalf("stats TCPPackets does not match bucketStat: %d - %d", stats.TCPPackets, bucketStat.TCPPackets)
 	}
 	if p.flowTrie.root.Load() == nil {
 		t.Fatalf("flow trie is empty\n")
@@ -94,9 +133,7 @@ func BenchmarkProcessorProcessBucket(b *testing.B) {
 	}
 
 	for b.Loop() {
-		if err := p.ProcessBucket(bucket); err != nil {
-			b.Fatalf("failed: %v", err)
-		}
+		p.ProcessBucket(bucket)
 	}
 }
 
@@ -162,7 +199,7 @@ func TestFlowTrie(t *testing.T) {
 		t.Fatal("missing ip3 in other")
 	}
 
-	err := trie.MergeTree(other)
+	err := trie.MergeTree(other, true)
 	if err != nil {
 		t.Fatal(err)
 	}

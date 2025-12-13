@@ -220,6 +220,9 @@ func GetCountryIndex(name string) int {
 	}
 	return -1
 }
+func GetCountryName(index int) string {
+	return countries[index]
+}
 func AddCountry(name string) int {
 	newIndex := int(len(countries))
 	countries = append(countries, name)
@@ -260,6 +263,9 @@ func GetIspIndex(isp string) int {
 		}
 	}
 	return -1
+}
+func GetIspName(index int) string {
+	return ispMap[index]
 }
 func AddIsp(isp string) int {
 	newIndex := int(len(ispMap))

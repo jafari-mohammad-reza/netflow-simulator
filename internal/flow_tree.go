@@ -295,7 +295,7 @@ func (t *FlowTrie) InsertMerge(flow *AggregatedFlow, isMerge bool) {
 }
 
 // merge with another tree using same logic as InsertMerge but aggregate packet fields and set them to zero
-func (t *FlowTrie) MergeTree(other *FlowTrie) error {
+func (t *FlowTrie) MergeTree(other *FlowTrie, seqMerge bool) error {
 	root := other.root.Load()
 	if root == nil {
 		return nil
@@ -307,7 +307,7 @@ func (t *FlowTrie) MergeTree(other *FlowTrie) error {
 		if hdr.typ == nodeLeaf {
 			leaf := asLeaf(n)
 			if leaf.data != nil {
-				t.InsertMerge(leaf.data, true)
+				t.InsertMerge(leaf.data, seqMerge)
 			}
 			return nil
 		}

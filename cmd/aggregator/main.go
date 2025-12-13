@@ -22,6 +22,7 @@ import (
 	"github.com/mum4k/termdash/widgets/text"
 
 	"netflow-reporter/internal"
+	"netflow-reporter/pkg"
 )
 
 const maxPoints = 120
@@ -54,26 +55,6 @@ func main() {
 	go queue.Start(ctx)
 
 	processor := internal.NewProcessor()
-
-	go func() {
-		tk := time.NewTicker(15 * time.Second)
-		defer tk.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-tk.C:
-				bucket := queue.Dequeue()
-				if bucket == nil {
-					continue
-				}
-				if len(bucket) == 0 {
-					continue
-				}
-				processor.ProcessBucket(bucket)
-			}
-		}
-	}()
 
 	t, err := tcell.New()
 	if err != nil {
@@ -128,7 +109,14 @@ func main() {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				current := processor.GetStats()
+				bucket := queue.Dequeue()
+				if bucket == nil {
+					continue
+				}
+				if len(bucket) == 0 {
+					continue
+				}
+				current := processor.ProcessBucket(bucket)
 				now := time.Now()
 
 				rates.mu.Lock()
@@ -193,16 +181,18 @@ func main() {
 							ip := net.IP(flow.IP[:])
 							totalPkts := flow.TCPPacketCount + flow.UDPPacketCount + flow.ICMPPacketCount
 							totalBytes := flow.TCPByteSum + flow.UDPByteSum + flow.ICMPByteSum
-
-							line := fmt.Sprintf("%2d. IP: %s | Pkts: %s | Bytes: %s | ISP: %d | Country: %d | Dir: %d | Seq: %d",
+							direction := "incoming"
+							if flow.Direction == 1 {
+								direction = "outgoing"
+							}
+							line := fmt.Sprintf("%2d. IP: %s | Pkts: %s | Bytes: %s | ISP: %s | Country: %s | Direction: %s",
 								i+1,
 								ip.String(),
 								formatNumber(totalPkts),
 								formatBytes(totalBytes),
-								flow.ISP,
-								flow.Country,
-								flow.Direction,
-								flow.Sequence)
+								pkg.GetIspName(flow.ISP),
+								pkg.GetCountryName(flow.Country),
+								direction)
 
 							reportText.Write(line + "\n")
 						}

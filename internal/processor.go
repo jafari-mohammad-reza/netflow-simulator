@@ -59,7 +59,7 @@ type AggregatedFlow struct {
 	Sequence int
 }
 
-func (p *Processor) ProcessBucket(bucket []pkg.NetflowPacket) error {
+func (p *Processor) ProcessBucket(bucket []pkg.NetflowPacket) FlowStats {
 	mu := sync.Mutex{}
 
 	threads := runtime.GOMAXPROCS(0)
@@ -71,19 +71,19 @@ func (p *Processor) ProcessBucket(bucket []pkg.NetflowPacket) error {
 		j := min(i+chunkSize, n)
 		chunks = append(chunks, bucket[i:j])
 	} // balanced junk sizes
-	ipMap := make(map[[16]byte]AggregatedFlow, len(bucket))
-	localMaps := make([]map[[16]byte]AggregatedFlow, 0, len(chunks))
+	ipMap := NewFlowTrie()
+
 	wg := sync.WaitGroup{}
 	for _, chunk := range chunks {
 		// agg chunk in local thread ip map and then merge ipMaps of each thread
 		wg.Go(func() {
-			localMap := make(map[[16]byte]AggregatedFlow, len(chunk)/2) // rough estimate
+			localMap := NewFlowTrie()
 			for _, item := range chunk {
 				ip, err := ParseIp(item.IP)
 				if err != nil {
 					continue
 				}
-				existing, ok := localMap[ip]
+				existing := localMap.Lookup(ip)
 
 				ispIndex := pkg.GetIspIndex(item.ISP)
 				if ispIndex == -1 {
@@ -114,8 +114,8 @@ func (p *Processor) ProcessBucket(bucket []pkg.NetflowPacket) error {
 					entry.ICMPPacketCount = 1
 					entry.ICMPByteSum = uint64(item.ByteSum)
 				}
-				if !ok {
-					localMap[ip] = entry
+				if existing == nil {
+					localMap.InsertMerge(&entry, false)
 				} else {
 					existing.TCPPacketCount += entry.TCPPacketCount
 					existing.TCPByteSum += entry.TCPByteSum
@@ -123,56 +123,57 @@ func (p *Processor) ProcessBucket(bucket []pkg.NetflowPacket) error {
 					existing.UDPByteSum += entry.UDPByteSum
 					existing.ICMPPacketCount += entry.ICMPPacketCount
 					existing.ICMPByteSum += entry.ICMPByteSum
-					localMap[ip] = existing
 				}
 			}
 			mu.Lock()
-			localMaps = append(localMaps, localMap)
+			ipMap.MergeTree(localMap, false)
 			mu.Unlock()
 		})
 	}
 	wg.Wait()
 	// merge localMaps into global ipMap
 
-	for _, localMap := range localMaps {
-		for ip, flows := range localMap {
-			existing, ok := ipMap[ip]
-			if !ok {
-				ipMap[ip] = flows
-			} else {
-				existing.TCPPacketCount += flows.TCPPacketCount
-				existing.TCPByteSum += flows.TCPByteSum
-				existing.UDPPacketCount += flows.UDPPacketCount
-				existing.UDPByteSum += flows.UDPByteSum
-				existing.ICMPPacketCount += flows.ICMPPacketCount
-				existing.ICMPByteSum += flows.ICMPByteSum
-				ipMap[ip] = existing
-			}
-		}
-	}
-
 	// lock the heap buckets, merge with local aggregated flows and increase the sequence
 	p.mu.Lock()
-	for _, flow := range ipMap {
-		f := flow
-		p.flowTrie.InsertMerge(&f, false)
+	flows := ipMap.WalkValues()
+	TCPPackets := uint64(0)
+	UDPPackets := uint64(0)
+	ICMPPackets := uint64(0)
+	TCPBytes := uint64(0)
+	UDPBytes := uint64(0)
+	ICMPBytes := uint64(0)
+	for _, flow := range flows {
+		TCPPackets += flow.TCPPacketCount
+		UDPPackets += flow.UDPPacketCount
+		ICMPPackets += flow.ICMPPacketCount
+		TCPBytes += flow.TCPByteSum
+		UDPBytes += flow.UDPByteSum
+		ICMPBytes += flow.ICMPByteSum
 	}
+
+	p.flowTrie.MergeTree(ipMap, false)
 	go p.ReportFlowStats()
 	ipMap = nil
-	localMaps = nil
 	runtime.GC()
 	p.mu.Unlock()
 	p.sequence.Add(1)
 	if p.sequence.Load()%240 == 0 {
 		p.mu.Lock()
-		p.flowHistory.MergeTree(p.flowTrie)
+		p.flowHistory.MergeTree(p.flowTrie, true)
 		p.flowTrie = NewFlowTrie()
 		p.sequence.Swap(0)
 		p.mu.Unlock()
 		go p.ReportHistoryStats()
 	}
 
-	return nil
+	return FlowStats{
+		TCPPackets,
+		UDPPackets,
+		ICMPPackets,
+		TCPBytes,
+		UDPBytes,
+		ICMPBytes,
+	}
 }
 
 type Filter struct {
