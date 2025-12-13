@@ -73,7 +73,6 @@ func (c *ConnFlowQueue) handleConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 
-		fmt.Printf("received batch of %d packets\n", len(batch))
 		c.Enqueue(batch)
 	}
 }
@@ -86,7 +85,7 @@ func (c *ConnFlowQueue) Enqueue(batch []pkg.NetflowPacket) {
 	if now-c.active.StartedAt > 15 {
 		// rotate bucket
 		c.queue = append(c.queue, *c.active)
-		fmt.Printf("create new bucket, queue len: %d\n", len(c.queue))
+
 		c.active = &FlowBucket{
 			StartedAt: now,
 			Flow:      make([]pkg.NetflowPacket, 0),
@@ -106,6 +105,6 @@ func (c *ConnFlowQueue) Dequeue() []pkg.NetflowPacket {
 
 	bucket := c.queue[0]
 	c.queue = c.queue[1:]
-	fmt.Println("dequeue bucket, remaining buckets:", len(c.queue))
+
 	return bucket.Flow
 }

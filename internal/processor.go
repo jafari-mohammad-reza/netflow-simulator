@@ -9,7 +9,6 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
-	"time"
 )
 
 type Processor struct {
@@ -59,9 +58,9 @@ type AggregatedFlow struct {
 }
 
 func (p *Processor) ProcessBucket(bucket []pkg.NetflowPacket) error {
-	start := time.Now()
+
 	mu := sync.Mutex{}
-	fmt.Println("processing bucket of size:", len(bucket))
+
 	threads := runtime.GOMAXPROCS(0)
 	n := len(bucket)
 	chunkSize := (n + threads - 1) / threads
@@ -163,17 +162,16 @@ func (p *Processor) ProcessBucket(bucket []pkg.NetflowPacket) error {
 	p.mu.Unlock()
 	p.sequence.Add(1)
 	if p.sequence.Load()%240 == 0 {
-		fmt.Println("merging flow history tree")
-		start := time.Now()
+
 		p.mu.Lock()
 		p.flowHistory.MergeTree(p.flowTrie)
 		p.flowTrie = NewFlowTrie()
 		p.sequence.Swap(0)
 		p.mu.Unlock()
 		go p.ReportHistoryStats()
-		fmt.Println("merged flow history tree in:", time.Since(start))
+
 	}
-	fmt.Println("processed bucket in:", time.Since(start))
+
 	return nil
 }
 
@@ -293,4 +291,39 @@ func ParseIp(ipStr string) ([16]byte, error) {
 
 	copy(out[:], ip)
 	return out, nil
+}
+
+type FlowStats struct {
+	TCPPackets  uint64
+	UDPPackets  uint64
+	ICMPPackets uint64
+	TCPBytes    uint64
+	UDPBytes    uint64
+	ICMPBytes   uint64
+}
+
+func (p *Processor) GetStats() FlowStats {
+	flows := p.flowTrie.WalkValues()
+	TCPPackets := uint64(0)
+	UDPPackets := uint64(0)
+	ICMPPackets := uint64(0)
+	TCPBytes := uint64(0)
+	UDPBytes := uint64(0)
+	ICMPBytes := uint64(0)
+	for _, flow := range flows {
+		TCPPackets += flow.TCPPacketCount
+		UDPPackets += flow.UDPPacketCount
+		ICMPPackets += flow.ICMPPacketCount
+		TCPBytes += flow.TCPByteSum
+		UDPBytes += flow.UDPByteSum
+		ICMPBytes += flow.ICMPByteSum
+	}
+	return FlowStats{
+		TCPPackets,
+		UDPPackets,
+		ICMPPackets,
+		TCPBytes,
+		UDPBytes,
+		ICMPBytes,
+	}
 }

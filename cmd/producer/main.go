@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"fmt"
 	"io"
 	"log"
 	"net"
@@ -29,7 +28,7 @@ func main() {
 	go func() {
 		for {
 			batch_size := 100_000 + time.Now().UnixNano()%1_000_000
-			fmt.Printf("batch_size: %v\n", batch_size)
+
 			batch := make([]pkg.NetflowPacket, 0, batch_size)
 			for range batch_size {
 				batch = append(batch, pkg.NetflowPacket{
@@ -38,7 +37,7 @@ func main() {
 					ISP:       pkg.GetRandISP(),
 					Country:   pkg.GetRandCountry(),
 					Direction: pkg.GetRandDirection(),
-					ByteSum:   time.Now().UnixNano() % 1_000_000,
+					ByteSum:   time.Now().UnixNano() % 100_000,
 				})
 			}
 			data, err := pkg.MarshalNetflowBatch(batch)
