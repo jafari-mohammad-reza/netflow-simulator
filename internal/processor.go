@@ -13,20 +13,26 @@ import (
 )
 
 type Processor struct {
-	mu          sync.RWMutex
-	sequence    atomic.Int32
-	flowTrie    *FlowTrie
-	flowHistory *FlowTrie // get merge with flow. history each 240 sequence
-	Reports     []Report
+	mu            sync.RWMutex
+	sequence      atomic.Int32
+	flowTrie      *FlowTrie
+	flowHistory   *FlowTrie // get merge with flow. history each 240 sequence
+	Reports       []Report
+	ruleEvaluator *RuleEvaluator
 }
 
 func NewProcessor() *Processor {
+	ruleEvaluator, err := NewRuleEvaluator()
+	if err != nil {
+		panic(fmt.Errorf("failed to create rule evaluator: %s", err.Error()))
+	}
 	return &Processor{
-		flowTrie:    NewFlowTrie(),
-		flowHistory: NewFlowTrie(),
-		mu:          sync.RWMutex{},
-		sequence:    atomic.Int32{},
-		Reports:     make([]Report, 1),
+		flowTrie:      NewFlowTrie(),
+		flowHistory:   NewFlowTrie(),
+		mu:            sync.RWMutex{},
+		sequence:      atomic.Int32{},
+		Reports:       make([]Report, 1),
+		ruleEvaluator: ruleEvaluator,
 	}
 }
 
@@ -164,7 +170,7 @@ func (p *Processor) ProcessBucket(bucket []pkg.NetflowPacket) error {
 		p.flowTrie = NewFlowTrie()
 		p.sequence.Swap(0)
 		p.mu.Unlock()
-		go p.ReportStats()
+		go p.ReportHistoryStats()
 		fmt.Println("merged flow history tree in:", time.Since(start))
 	}
 	fmt.Println("processed bucket in:", time.Since(start))
@@ -192,7 +198,7 @@ type Report struct {
 	Results    []*AggregatedFlow
 }
 
-func (p *Processor) ReportStats() {
+func (p *Processor) ReportHistoryStats() {
 	filters := make([]Filter, 0)
 
 	reports := make([]Report, 0)
@@ -260,6 +266,16 @@ func (p *Processor) ReportStats() {
 	p.mu.RLock()
 	p.Reports = reports
 	p.mu.RUnlock()
+}
+
+func (p *Processor) ReportCandidateFlows() []CandidateFlow {
+	history := p.flowHistory.WalkValues()
+	candidates, err := p.ruleEvaluator.Evaluate(history)
+	if err != nil {
+		fmt.Printf("failed to Evaluate candidates: %s\n", err.Error())
+		return nil
+	}
+	return candidates
 }
 
 func ParseIp(ipStr string) ([16]byte, error) {

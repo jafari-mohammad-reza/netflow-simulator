@@ -4,6 +4,9 @@ import (
 	"netflow-reporter/pkg"
 	"testing"
 	"time"
+
+	"github.com/expr-lang/expr"
+	"github.com/expr-lang/expr/vm"
 )
 
 func TestProcessorProcessBucket(t *testing.T) {
@@ -251,7 +254,7 @@ func TestProcessorReportStats(t *testing.T) {
 		p.flowHistory.InsertMerge(flow, false)
 	}
 
-	p.ReportStats()
+	p.ReportHistoryStats()
 	if len(p.Reports) == 0 {
 		t.Fatal("processor reports are empty after report stats")
 	}
@@ -293,7 +296,49 @@ func BenchmarkProcessorReportStats(b *testing.B) {
 		p.flowHistory.InsertMerge(flow, false)
 	}
 	for b.Loop() {
-		p.ReportStats()
+		p.ReportHistoryStats()
 	}
 
+}
+
+func TestRuleEvaluator(t *testing.T) {
+	engine := &RuleEvaluator{
+		Rules: []CompiledRule{
+			{
+				Name:       "TCPByteSumRule",
+				Expression: "TCPByteSum > 0",
+				Program:    mustCompile(t, "TCPByteSum > 0"),
+				Enabled:    true,
+			},
+		},
+	}
+
+	testItems := make([]*AggregatedFlow, 0, 100_000)
+	ip, _ := ParseIp("1.1.1.1")
+
+	for i := 0; i < 100_000; i++ {
+		tf := &AggregatedFlow{IP: ip}
+		if i >= 25000 && i < 50000 {
+			tf.TCPByteSum = 20
+		}
+		testItems = append(testItems, tf)
+	}
+
+	evaluateds, err := engine.Evaluate(testItems)
+	if err != nil {
+		t.Fatalf("failed to evaluate items: %v", err)
+	}
+
+	t.Logf("evaluated %d items, got %d candidates", len(testItems), len(evaluateds))
+	if len(evaluateds) != 25000 {
+		t.Fatalf("expected 25000 candidates, got %d", len(evaluateds))
+	}
+}
+func mustCompile(t *testing.T, exprStr string) *vm.Program {
+	t.Helper()
+	prog, err := expr.Compile(exprStr, expr.Env(AggregatedFlow{}))
+	if err != nil {
+		t.Fatalf("failed to compile expression: %v", err)
+	}
+	return prog
 }
