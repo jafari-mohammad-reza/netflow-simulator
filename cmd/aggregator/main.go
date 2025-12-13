@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
 	"os/signal"
 	"sync"
 	"syscall"
@@ -13,8 +14,10 @@ import (
 	"github.com/mum4k/termdash/cell"
 	"github.com/mum4k/termdash/container"
 	"github.com/mum4k/termdash/container/grid"
+	"github.com/mum4k/termdash/keyboard"
 	"github.com/mum4k/termdash/linestyle"
 	"github.com/mum4k/termdash/terminal/tcell"
+	"github.com/mum4k/termdash/terminal/terminalapi"
 	"github.com/mum4k/termdash/widgets/linechart"
 	"github.com/mum4k/termdash/widgets/text"
 
@@ -35,6 +38,13 @@ type safeStats struct {
 	bpsICMP  float64
 }
 
+type viewMode int
+
+const (
+	viewCharts viewMode = iota
+	viewReports
+)
+
 func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(),
 		syscall.SIGTERM, syscall.SIGINT, syscall.SIGQUIT)
@@ -54,7 +64,10 @@ func main() {
 				return
 			case <-tk.C:
 				bucket := queue.Dequeue()
-				if bucket == nil || len(bucket) == 0 {
+				if bucket == nil {
+					continue
+				}
+				if len(bucket) == 0 {
 					continue
 				}
 				processor.ProcessBucket(bucket)
@@ -92,6 +105,8 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+
+	currentView := viewCharts
 
 	var mu sync.Mutex
 	var rates safeStats
@@ -166,69 +181,94 @@ func main() {
 				if len(reports) == 0 {
 					reportText.Reset()
 					reportText.Write("No reports yet\n", text.WriteCellOpts(cell.FgColor(cell.ColorGray)))
-					continue
-				}
+				} else {
+					reportText.Reset()
+					reportText.Write("Top Flows Reports\n\n", text.WriteCellOpts(cell.FgColor(cell.ColorWhite), cell.Bold()))
 
-				reportText.Reset()
-				reportText.Write("Top Flows Reports\n\n", text.WriteCellOpts(cell.FgColor(cell.ColorWhite), cell.Bold()))
+					for _, r := range reports {
+						reportText.Write(fmt.Sprintf("≡ %s (Top %d)\n", r.FilterName, len(r.Results)),
+							text.WriteCellOpts(cell.FgColor(cell.ColorCyan), cell.Bold()))
 
-				for _, r := range reports {
-					reportText.Write(fmt.Sprintf("≡ %s (Top %d)\n", r.FilterName, len(r.Results)),
-						text.WriteCellOpts(cell.FgColor(cell.ColorCyan), cell.Bold()))
+						for i, flow := range r.Results {
+							ip := net.IP(flow.IP[:])
+							totalPkts := flow.TCPPacketCount + flow.UDPPacketCount + flow.ICMPPacketCount
+							totalBytes := flow.TCPByteSum + flow.UDPByteSum + flow.ICMPByteSum
 
-					for i, flow := range r.Results {
-						ip := net.IP(flow.IP[:])
-						totalPkts := flow.TCPPacketCount + flow.UDPPacketCount + flow.ICMPPacketCount
-						totalBytes := flow.TCPByteSum + flow.UDPByteSum + flow.ICMPByteSum
+							line := fmt.Sprintf("%2d. IP: %s | Pkts: %s | Bytes: %s | ISP: %d | Country: %d | Dir: %d | Seq: %d",
+								i+1,
+								ip.String(),
+								formatNumber(totalPkts),
+								formatBytes(totalBytes),
+								flow.ISP,
+								flow.Country,
+								flow.Direction,
+								flow.Sequence)
 
-						line := fmt.Sprintf("%2d. %s | Pkts: %s | Bytes: %s",
-							i+1,
-							ip.String(),
-							formatNumber(totalPkts),
-							formatBytes(totalBytes))
-
-						if r.FilterName == "IP" {
-							reportText.Write(line+"\n", text.WriteCellOpts(cell.FgColor(cell.ColorYellow)))
-						} else {
 							reportText.Write(line + "\n")
 						}
+						reportText.Write("\n")
 					}
-					reportText.Write("\n")
 				}
 			}
 		}
 	}()
 
-	builder := grid.New()
-	builder.Add(
-		grid.ColWidthPerc(50,
-			grid.RowHeightPerc(50,
-				grid.Widget(lcPackets,
+	updateContainer := func(c *container.Container) error {
+		builder := grid.New()
+		if currentView == viewCharts {
+
+			builder.Add(
+				grid.RowHeightPerc(50,
+					grid.Widget(lcPackets,
+						container.Border(linestyle.Double),
+						container.BorderTitle(" Packets (Kpps) "))),
+				grid.RowHeightPerc(50,
+					grid.Widget(lcBytes,
+						container.Border(linestyle.Double),
+						container.BorderTitle(" Traffic (GB/s) "))),
+			)
+		} else {
+
+			builder.Add(
+				grid.Widget(reportText,
 					container.Border(linestyle.Double),
-					container.BorderTitle(" Packets (Kpps) "))),
-			grid.RowHeightPerc(50,
-				grid.Widget(lcBytes,
-					container.Border(linestyle.Double),
-					container.BorderTitle(" Traffic (GB/s) "))),
-		),
-		grid.ColWidthPerc(50,
-			grid.Widget(reportText,
-				container.Border(linestyle.Double),
-				container.BorderTitle(" Top Flows Reports "))),
+					container.BorderTitle(" Top Flows Reports ")))
+		}
+
+		opts, err := builder.Build()
+		if err != nil {
+			return err
+		}
+
+		return c.Update("root", append([]container.Option{container.Clear()}, opts...)...)
+	}
+
+	c, err := container.New(t,
+		container.ID("root"),
+		container.Border(linestyle.Light),
+		container.BorderTitle(" NetFlow Dashboard - ← → to switch views | q to quit "),
 	)
-
-	gridOpts, err := builder.Build()
 	if err != nil {
 		panic(err)
 	}
 
-	c, err := container.New(t, gridOpts...)
-	if err != nil {
-		panic(err)
-	}
+	updateContainer(c)
 
 	if err := termdash.Run(ctx, t, c,
 		termdash.RedrawInterval(500*time.Millisecond),
+		termdash.KeyboardSubscriber(func(k *terminalapi.Keyboard) {
+			switch k.Key {
+			case keyboard.KeyArrowLeft, keyboard.KeyArrowRight:
+				if currentView == viewCharts {
+					currentView = viewReports
+				} else {
+					currentView = viewCharts
+				}
+				updateContainer(c)
+			case 'q', 'Q', keyboard.KeyEsc, keyboard.KeyCtrlC, keyboard.KeyCtrlQ:
+				os.Exit(1)
+			}
+		}),
 	); err != nil {
 		panic(err)
 	}
