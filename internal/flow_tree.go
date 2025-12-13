@@ -144,7 +144,7 @@ func mergeInto(dst *AggregatedFlow, src *AggregatedFlow) {
 	dst.ICMPByteSum += src.ICMPByteSum
 }
 
-func (t *FlowTrie) InsertMerge(flow *AggregatedFlow) {
+func (t *FlowTrie) InsertMerge(flow *AggregatedFlow, isMerge bool) {
 	for {
 		root := t.root.Load()
 
@@ -176,6 +176,39 @@ func (t *FlowTrie) InsertMerge(flow *AggregatedFlow) {
 				parentPtr = &in.right
 				dirLeft = false
 				cur = in.right.Load()
+			}
+			if isMerge {
+
+				TCPPacketCountUniformed := float64(flow.TCPPacketCount) / 240 / 15 // an hour is 240 15-second intervals
+				TCPByteSumUniformed := float64(flow.TCPByteSum) / 240 / 15
+				UDPPacketCountUniformed := float64(flow.UDPPacketCount) / 240 / 15
+				UDPByteSumUniformed := float64(flow.UDPByteSum) / 240 / 15
+				ICMPPacketCountUniformed := float64(flow.ICMPPacketCount) / 240 / 15
+				ICMPByteSumUniformed := float64(flow.ICMPByteSum) / 240 / 15
+
+				if flow.Sequence.Load() > 1 {
+					flow.TCPPacketCountUniformed = ((TCPPacketCountUniformed * 2) + flow.TCPPacketCountUniformed) / 3
+					flow.TCPByteSumUniformed = ((TCPByteSumUniformed * 2) + flow.TCPByteSumUniformed) / 3
+					flow.UDPPacketCountUniformed = ((UDPPacketCountUniformed * 2) + flow.UDPPacketCountUniformed) / 3
+					flow.UDPByteSumUniformed = ((UDPByteSumUniformed * 2) + flow.UDPByteSumUniformed) / 3
+					flow.ICMPPacketCountUniformed = ((ICMPPacketCountUniformed * 2) + flow.ICMPPacketCountUniformed) / 3
+					flow.ICMPByteSumUniformed = ((ICMPByteSumUniformed * 2) + flow.ICMPByteSumUniformed) / 3
+				} else {
+					flow.TCPPacketCountUniformed = TCPPacketCountUniformed
+					flow.TCPByteSumUniformed = TCPByteSumUniformed
+					flow.UDPPacketCountUniformed = UDPPacketCountUniformed
+					flow.UDPByteSumUniformed = UDPByteSumUniformed
+					flow.ICMPPacketCountUniformed = ICMPPacketCountUniformed
+					flow.ICMPByteSumUniformed = ICMPByteSumUniformed
+				}
+
+				flow.TCPPacketCount = 0
+				flow.TCPByteSum = 0
+				flow.UDPPacketCount = 0
+				flow.UDPByteSum = 0
+				flow.ICMPPacketCount = 0
+				flow.ICMPByteSum = 0
+				flow.Sequence.Add(1)
 			}
 			if cur == nil {
 
@@ -261,6 +294,42 @@ func (t *FlowTrie) InsertMerge(flow *AggregatedFlow) {
 		}
 
 	}
+}
+
+// merge with another tree using same logic as InsertMerge but aggregate packet fields and set them to zero
+func (t *FlowTrie) MergeTree(other *FlowTrie) error {
+	root := other.root.Load()
+	if root == nil {
+		return nil
+	}
+
+	var mergeNode func(n *anyNode) error
+	mergeNode = func(n *anyNode) error {
+		hdr := (*nodeHeader)(unsafe.Pointer(n))
+		if hdr.typ == nodeLeaf {
+			leaf := asLeaf(n)
+			if leaf.data != nil {
+				t.InsertMerge(leaf.data, true)
+			}
+			return nil
+		}
+		in := asInternal(n)
+		left := in.left.Load()
+		if left != nil {
+			if err := mergeNode(left); err != nil {
+				return err
+			}
+		}
+		right := in.right.Load()
+		if right != nil {
+			if err := mergeNode(right); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	return mergeNode(root)
 }
 
 func flowCopy(src *AggregatedFlow) *AggregatedFlow {

@@ -11,16 +11,18 @@ import (
 )
 
 type Processor struct {
-	mu       sync.RWMutex
-	sequence atomic.Int32
-	tries    *FlowTrie
+	mu          sync.RWMutex
+	sequence    atomic.Int32
+	flowTrie    *FlowTrie
+	flowHistory *FlowTrie // get merge with flow. history each 240 sequence
 }
 
 func NewProcessor() *Processor {
 	return &Processor{
-		tries:    NewFlowTrie(),
-		mu:       sync.RWMutex{},
-		sequence: atomic.Int32{},
+		flowTrie:    NewFlowTrie(),
+		flowHistory: NewFlowTrie(),
+		mu:          sync.RWMutex{},
+		sequence:    atomic.Int32{},
 	}
 }
 
@@ -35,6 +37,15 @@ type AggregatedFlow struct {
 	UDPByteSum      uint64
 	ICMPPacketCount uint64
 	ICMPByteSum     uint64
+
+	TCPPacketCountUniformed  float64
+	TCPByteSumUniformed      float64
+	UDPPacketCountUniformed  float64
+	UDPByteSumUniformed      float64
+	ICMPPacketCountUniformed float64
+	ICMPByteSumUniformed     float64
+
+	Sequence atomic.Int32
 }
 
 func (p *Processor) ProcessBucket(bucket []pkg.NetflowPacket) error {
@@ -109,6 +120,7 @@ func (p *Processor) ProcessBucket(bucket []pkg.NetflowPacket) error {
 	}
 	wg.Wait()
 	// merge localMaps into global ipMap
+
 	for _, localMap := range localMaps {
 		for ip, flows := range localMap {
 			existing, ok := ipMap[ip]
@@ -121,20 +133,33 @@ func (p *Processor) ProcessBucket(bucket []pkg.NetflowPacket) error {
 				existing.UDPByteSum += flows.UDPByteSum
 				existing.ICMPPacketCount += flows.ICMPPacketCount
 				existing.ICMPByteSum += flows.ICMPByteSum
+				existing.Sequence.Store(p.sequence.Load() + 1)
+
 				ipMap[ip] = existing
 			}
 		}
 	}
+
 	// lock the heap buckets, merge with local aggregated flows and increase the sequence
 	p.mu.Lock()
 	for _, flow := range ipMap {
-		p.tries.InsertMerge(&flow)
+		p.flowTrie.InsertMerge(&flow, false)
 	}
 	ipMap = nil
 	localMaps = nil
 	runtime.GC()
 	p.mu.Unlock()
 	p.sequence.Add(1)
+	if p.sequence.Load()%240 == 0 {
+		fmt.Println("merging flow history tree")
+		start := time.Now()
+		p.mu.Lock()
+		p.flowHistory.MergeTree(p.flowTrie)
+		p.flowTrie = NewFlowTrie()
+		p.sequence.Swap(0)
+		p.mu.Unlock()
+		fmt.Println("merged flow history tree in:", time.Since(start))
+	}
 	fmt.Println("processed bucket in:", time.Since(start))
 	return nil
 }
