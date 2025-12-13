@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"net"
 	"netflow-reporter/pkg"
+	"reflect"
 	"runtime"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,6 +17,7 @@ type Processor struct {
 	sequence    atomic.Int32
 	flowTrie    *FlowTrie
 	flowHistory *FlowTrie // get merge with flow. history each 240 sequence
+	Reports     []Report
 }
 
 func NewProcessor() *Processor {
@@ -23,14 +26,15 @@ func NewProcessor() *Processor {
 		flowHistory: NewFlowTrie(),
 		mu:          sync.RWMutex{},
 		sequence:    atomic.Int32{},
+		Reports:     make([]Report, 1),
 	}
 }
 
 type AggregatedFlow struct {
 	IP              [16]byte
-	ISP             uint8
-	Country         uint8
-	Direction       uint8
+	ISP             int
+	Country         int
+	Direction       int
 	TCPPacketCount  uint64
 	TCPByteSum      uint64
 	UDPPacketCount  uint64
@@ -83,14 +87,14 @@ func (p *Processor) ProcessBucket(bucket []pkg.NetflowPacket) error {
 				if countryIndex == -1 {
 					countryIndex = pkg.AddCountry(item.Country)
 				}
-				direction := uint8(0)
+				direction := int(0)
 				if item.Direction == "OUT" {
 					direction = 1
 				}
 				entry := AggregatedFlow{
 					IP:        ip, // make the string ip a 16 byte array
-					ISP:       uint8(ispIndex),
-					Country:   uint8(countryIndex),
+					ISP:       ispIndex,
+					Country:   countryIndex,
 					Direction: direction,
 				}
 				switch item.Protocol {
@@ -160,10 +164,102 @@ func (p *Processor) ProcessBucket(bucket []pkg.NetflowPacket) error {
 		p.flowTrie = NewFlowTrie()
 		p.sequence.Swap(0)
 		p.mu.Unlock()
+		go p.ReportStats()
 		fmt.Println("merged flow history tree in:", time.Since(start))
 	}
 	fmt.Println("processed bucket in:", time.Since(start))
 	return nil
+}
+
+type Filter struct {
+	Field string
+	Count int // default is 10
+}
+
+func NewFilter(field string, count int) Filter {
+	c := count
+	if c == 0 {
+		c = 10
+	}
+	return Filter{
+		Field: field,
+		Count: c,
+	}
+}
+
+type Report struct {
+	FilterName string
+	Results    []*AggregatedFlow
+}
+
+func (p *Processor) ReportStats() {
+	filters := make([]Filter, 0)
+
+	reports := make([]Report, 0)
+
+	history := p.flowHistory.WalkValues()
+	sampleFlow := history[0]
+	t := reflect.TypeOf(sampleFlow)
+	if t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	for i := 0; i < t.NumField(); i++ {
+		field := t.Field(i)
+		filters = append(filters, NewFilter(field.Name, 10))
+	}
+	mu := sync.Mutex{}
+	wg := sync.WaitGroup{}
+	for _, filter := range filters {
+		val := reflect.ValueOf(sampleFlow).Elem().FieldByName(filter.Field)
+		if !val.IsValid() {
+			continue
+		}
+		wg.Go(func() {
+			historyCp := make([]*AggregatedFlow, len(history))
+			copy(historyCp, history)
+			switch val.Kind() {
+			case reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+				sort.Slice(historyCp, func(i, j int) bool {
+					vi := reflect.ValueOf(historyCp[i]).Elem().FieldByName(filter.Field)
+					vj := reflect.ValueOf(historyCp[j]).Elem().FieldByName(filter.Field)
+					return vi.Uint() > vj.Uint()
+				})
+			case reflect.Float64:
+				sort.Slice(historyCp, func(i, j int) bool {
+					vi := reflect.ValueOf(historyCp[i]).Elem().FieldByName(filter.Field)
+					vj := reflect.ValueOf(historyCp[j]).Elem().FieldByName(filter.Field)
+					return vi.Float() > vj.Float()
+				})
+			case reflect.Int8, reflect.Array:
+				sort.Slice(historyCp, func(i, j int) bool {
+
+					viTcp := reflect.ValueOf(historyCp[i]).Elem().FieldByName("TCPPacketCount")
+					viUdp := reflect.ValueOf(historyCp[i]).Elem().FieldByName("UDPPacketCount")
+					viIcmp := reflect.ValueOf(historyCp[i]).Elem().FieldByName("ICMPPacketCount")
+					vi := viTcp.Uint() + viUdp.Uint() + viIcmp.Uint()
+
+					vjTcp := reflect.ValueOf(historyCp[j]).Elem().FieldByName("TCPPacketCount")
+					vjUdp := reflect.ValueOf(historyCp[j]).Elem().FieldByName("UDPPacketCount")
+					vjIcmp := reflect.ValueOf(historyCp[j]).Elem().FieldByName("ICMPPacketCount")
+					vj := vjTcp.Uint() + vjUdp.Uint() + vjIcmp.Uint()
+
+					return vi > vj
+				})
+			}
+			mu.Lock()
+			count := min(filter.Count, len(historyCp))
+			top := historyCp[:count]
+			reports = append(reports, Report{
+				FilterName: filter.Field,
+				Results:    top,
+			})
+			mu.Unlock()
+		})
+	}
+	wg.Wait()
+	p.mu.RLock()
+	p.Reports = reports
+	p.mu.RUnlock()
 }
 
 func ParseIp(ipStr string) ([16]byte, error) {

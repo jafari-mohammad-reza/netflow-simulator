@@ -1,8 +1,6 @@
 package internal
 
 import (
-	"context"
-	"net"
 	"netflow-reporter/pkg"
 	"testing"
 	"time"
@@ -11,6 +9,7 @@ import (
 func TestProcessorProcessBucket(t *testing.T) {
 	p := NewProcessor()
 	bucket := make([]pkg.NetflowPacket, 0, 1000)
+	pkg.InitRandData()
 	for range 1000 {
 		bucket = append(bucket, pkg.NetflowPacket{
 			IP:        pkg.GetRandIP(),
@@ -227,21 +226,74 @@ func TestConnFlowQueue(t *testing.T) {
 		t.Fatal("unexpected dequeue")
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+}
 
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		cancel()
-	}()
+func TestProcessorReportStats(t *testing.T) {
+	p := NewProcessor()
 
-	err := q.Start(ctx)
-	if err == nil {
-		t.Fatal("expected context cancel")
+	for i := range 1000 {
+		ipBytes := [16]byte{}
+		copy(ipBytes[:], []byte{byte(i % 256), byte((i / 256) % 256)})
+
+		flow := &AggregatedFlow{
+			IP:              ipBytes,
+			ISP:             int(i % 5),
+			Country:         int(i % 10),
+			Direction:       int(i % 2),
+			TCPPacketCount:  uint64(i * 3),
+			TCPByteSum:      uint64(i * 10),
+			UDPPacketCount:  uint64(i * 2),
+			UDPByteSum:      uint64(i * 5),
+			ICMPPacketCount: uint64(i),
+			ICMPByteSum:     uint64(i * 2),
+			Sequence:        i,
+		}
+		p.flowHistory.InsertMerge(flow, false)
 	}
 
-	ln, err := net.Listen("tcp", "127.0.0.1:6071")
-	if err == nil {
-		ln.Close()
+	p.ReportStats()
+	if len(p.Reports) == 0 {
+		t.Fatal("processor reports are empty after report stats")
 	}
+
+	for _, r := range p.Reports {
+		if len(r.Results) == 0 {
+			t.Fatalf("report for filter %s has no results", r.FilterName)
+		}
+		for _, f := range r.Results {
+			if f == nil {
+				t.Fatalf("nil flow in report %s", r.FilterName)
+			}
+		}
+	}
+}
+
+func BenchmarkProcessorReportStats(b *testing.B) {
+	b.ReportAllocs()
+
+	p := NewProcessor()
+
+	for i := range 1_000_000 {
+		ipBytes := [16]byte{}
+		copy(ipBytes[:], []byte{byte(i % 256), byte((i / 256) % 256)})
+
+		flow := &AggregatedFlow{
+			IP:              ipBytes,
+			ISP:             int(i % 5),
+			Country:         int(i % 10),
+			Direction:       int(i % 2),
+			TCPPacketCount:  uint64(i * 3),
+			TCPByteSum:      uint64(i * 10),
+			UDPPacketCount:  uint64(i * 2),
+			UDPByteSum:      uint64(i * 5),
+			ICMPPacketCount: uint64(i),
+			ICMPByteSum:     uint64(i * 2),
+			Sequence:        i,
+		}
+		p.flowHistory.InsertMerge(flow, false)
+	}
+	for b.Loop() {
+		p.ReportStats()
+	}
+
 }

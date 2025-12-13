@@ -330,6 +330,45 @@ func (t *FlowTrie) MergeTree(other *FlowTrie) error {
 	return mergeNode(root)
 }
 
+func (t *FlowTrie) WalkValues() []*AggregatedFlow {
+	var out []*AggregatedFlow
+	root := t.root.Load()
+	if root == nil {
+		return out
+	}
+
+	var walk func(n *anyNode)
+	walk = func(n *anyNode) {
+		if n == nil {
+			return
+		}
+		hdr := (*nodeHeader)(unsafe.Pointer(n))
+		if hdr.typ == nodeLeaf {
+			leaf := asLeaf(n)
+			if leaf.data != nil {
+				out = append(out, leaf.data)
+			}
+			return
+		}
+		in := asInternal(n)
+		walk(in.left.Load())
+		walk(in.right.Load())
+	}
+
+	walk(root)
+	return out
+}
+
+func (t *FlowTrie) Filter(predicate func(*AggregatedFlow) bool) []*AggregatedFlow {
+	var out []*AggregatedFlow
+	for _, v := range t.WalkValues() {
+		if predicate(v) {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 func flowCopy(src *AggregatedFlow) *AggregatedFlow {
 	dst := new(AggregatedFlow)
 	*dst = *src
