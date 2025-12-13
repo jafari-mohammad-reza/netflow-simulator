@@ -50,6 +50,7 @@ type AggregatedFlow struct {
 
 func (p *Processor) ProcessBucket(bucket []pkg.NetflowPacket) error {
 	start := time.Now()
+	mu := sync.Mutex{}
 	fmt.Println("processing bucket of size:", len(bucket))
 	threads := runtime.GOMAXPROCS(0)
 	n := len(bucket)
@@ -115,7 +116,9 @@ func (p *Processor) ProcessBucket(bucket []pkg.NetflowPacket) error {
 					localMap[ip] = existing
 				}
 			}
+			mu.Lock()
 			localMaps = append(localMaps, localMap)
+			mu.Unlock()
 		})
 	}
 	wg.Wait()
@@ -143,7 +146,8 @@ func (p *Processor) ProcessBucket(bucket []pkg.NetflowPacket) error {
 	// lock the heap buckets, merge with local aggregated flows and increase the sequence
 	p.mu.Lock()
 	for _, flow := range ipMap {
-		p.flowTrie.InsertMerge(&flow, false)
+		f := flow
+		p.flowTrie.InsertMerge(&f, false)
 	}
 	ipMap = nil
 	localMaps = nil

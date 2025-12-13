@@ -65,9 +65,7 @@ func firstDiffBit(a, b *[16]byte) (uint16, bool) {
 		bv := b[byteIdx]
 		if av != bv {
 			x := av ^ bv
-
-			leading := uint16(7 - clz8(x))
-			return uint16(byteIdx<<3) + leading, false
+			return uint16(byteIdx<<3) + uint16(clz8(x)), false
 		}
 	}
 	return 0, true
