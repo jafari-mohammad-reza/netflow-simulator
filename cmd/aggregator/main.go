@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"net"
 	"os/signal"
 	"sync"
 	"syscall"
@@ -86,14 +88,10 @@ func main() {
 		panic(err)
 	}
 
-	legend, err := text.New()
+	reportText, err := text.New(text.RollContent(), text.WrapAtRunes())
 	if err != nil {
 		panic(err)
 	}
-	legend.Write("Legend:\n", text.WriteCellOpts(cell.FgColor(cell.ColorWhite)))
-	legend.Write("██ TCP   ", text.WriteCellOpts(cell.FgColor(cell.ColorNumber(196))))
-	legend.Write("██ UDP   ", text.WriteCellOpts(cell.FgColor(cell.ColorNumber(46))))
-	legend.Write("██ ICMP  ", text.WriteCellOpts(cell.FgColor(cell.ColorNumber(21))))
 
 	var mu sync.Mutex
 	var rates safeStats
@@ -163,20 +161,60 @@ func main() {
 				lcBytes.Series("TCP", offsetSlice(bpsTCPHist, +offset*2), linechart.SeriesCellOpts(cell.FgColor(cell.ColorNumber(196))))
 				lcBytes.Series("UDP", offsetSlice(bpsUDPHist, 0), linechart.SeriesCellOpts(cell.FgColor(cell.ColorNumber(46))))
 				lcBytes.Series("ICMP", offsetSlice(bpsICMPHist, -offset*2), linechart.SeriesCellOpts(cell.FgColor(cell.ColorNumber(21))))
+
+				reports := processor.GetFlowReports()
+				if len(reports) == 0 {
+					reportText.Reset()
+					reportText.Write("No reports yet\n", text.WriteCellOpts(cell.FgColor(cell.ColorGray)))
+					continue
+				}
+
+				reportText.Reset()
+				reportText.Write("Top Flows Reports\n\n", text.WriteCellOpts(cell.FgColor(cell.ColorWhite), cell.Bold()))
+
+				for _, r := range reports {
+					reportText.Write(fmt.Sprintf("≡ %s (Top %d)\n", r.FilterName, len(r.Results)),
+						text.WriteCellOpts(cell.FgColor(cell.ColorCyan), cell.Bold()))
+
+					for i, flow := range r.Results {
+						ip := net.IP(flow.IP[:])
+						totalPkts := flow.TCPPacketCount + flow.UDPPacketCount + flow.ICMPPacketCount
+						totalBytes := flow.TCPByteSum + flow.UDPByteSum + flow.ICMPByteSum
+
+						line := fmt.Sprintf("%2d. %s | Pkts: %s | Bytes: %s",
+							i+1,
+							ip.String(),
+							formatNumber(totalPkts),
+							formatBytes(totalBytes))
+
+						if r.FilterName == "IP" {
+							reportText.Write(line+"\n", text.WriteCellOpts(cell.FgColor(cell.ColorYellow)))
+						} else {
+							reportText.Write(line + "\n")
+						}
+					}
+					reportText.Write("\n")
+				}
 			}
 		}
 	}()
 
 	builder := grid.New()
 	builder.Add(
-		grid.RowHeightPerc(50,
-			grid.Widget(lcPackets,
+		grid.ColWidthPerc(50,
+			grid.RowHeightPerc(50,
+				grid.Widget(lcPackets,
+					container.Border(linestyle.Double),
+					container.BorderTitle(" Packets (Kpps) "))),
+			grid.RowHeightPerc(50,
+				grid.Widget(lcBytes,
+					container.Border(linestyle.Double),
+					container.BorderTitle(" Traffic (GB/s) "))),
+		),
+		grid.ColWidthPerc(50,
+			grid.Widget(reportText,
 				container.Border(linestyle.Double),
-				container.BorderTitle(" Packets (Kpps) "))),
-		grid.RowHeightPerc(50,
-			grid.Widget(lcBytes,
-				container.Border(linestyle.Double),
-				container.BorderTitle(" Traffic (GB/s) "))),
+				container.BorderTitle(" Top Flows Reports "))),
 	)
 
 	gridOpts, err := builder.Build()
@@ -202,4 +240,30 @@ func offsetSlice(in []float64, offset float64) []float64 {
 		out[i] = v + offset
 	}
 	return out
+}
+
+func formatNumber(n uint64) string {
+	if n < 1000 {
+		return fmt.Sprintf("%d", n)
+	}
+	if n < 1000000 {
+		return fmt.Sprintf("%.1fK", float64(n)/1000)
+	}
+	if n < 1000000000 {
+		return fmt.Sprintf("%.1fM", float64(n)/1000000)
+	}
+	return fmt.Sprintf("%.1fB", float64(n)/1000000000)
+}
+
+func formatBytes(b uint64) string {
+	if b < 1024 {
+		return fmt.Sprintf("%dB", b)
+	}
+	if b < 1024*1024 {
+		return fmt.Sprintf("%.1fKB", float64(b)/1024)
+	}
+	if b < 1024*1024*1024 {
+		return fmt.Sprintf("%.1fMB", float64(b)/1024/1024)
+	}
+	return fmt.Sprintf("%.1fGB", float64(b)/1024/1024/1024)
 }

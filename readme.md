@@ -1,1 +1,18 @@
-## netflow simulator is built on two parts a publisher that publish mocked fake network packets with different protocols and publish it using tcp to a consumer tha tthis consumer mergesort the incomign packets base on ip and sum the numerical fields and after a while give a statical report about top five incoming packets , top five outgoing ips , which ips had increase traffic during time and create a chart for the flow of that ip, for summing this large amount of records we use simd and vectorization techniques
+##  Netflow simulator
+
+simulate a work flow processor that:
+
+- receives millions of network packets
+- aggregate them by IP and protocol
+- save history of them
+- and show their changes through time
+
+current dashboards:
+
+- Packet charts per protocol
+- Traffic(GB) charts per protocol
+- Top 10 Packets base on differnet filters
+
+v1 image:
+
+![Alt text](./.github/v1_demo.png)

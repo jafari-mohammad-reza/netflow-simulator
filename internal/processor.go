@@ -12,12 +12,13 @@ import (
 )
 
 type Processor struct {
-	mu            sync.RWMutex
-	sequence      atomic.Int32
-	flowTrie      *FlowTrie
-	flowHistory   *FlowTrie // get merge with flow. history each 240 sequence
-	Reports       []Report
-	ruleEvaluator *RuleEvaluator
+	mu             sync.RWMutex
+	sequence       atomic.Int32
+	flowTrie       *FlowTrie
+	flowHistory    *FlowTrie // get merge with flow. history each 240 sequence
+	HistoryReports []Report
+	FlowReports    []Report
+	ruleEvaluator  *RuleEvaluator
 }
 
 func NewProcessor() *Processor {
@@ -26,12 +27,13 @@ func NewProcessor() *Processor {
 		panic(fmt.Errorf("failed to create rule evaluator: %s", err.Error()))
 	}
 	return &Processor{
-		flowTrie:      NewFlowTrie(),
-		flowHistory:   NewFlowTrie(),
-		mu:            sync.RWMutex{},
-		sequence:      atomic.Int32{},
-		Reports:       make([]Report, 1),
-		ruleEvaluator: ruleEvaluator,
+		flowTrie:       NewFlowTrie(),
+		flowHistory:    NewFlowTrie(),
+		mu:             sync.RWMutex{},
+		sequence:       atomic.Int32{},
+		HistoryReports: make([]Report, 1),
+		FlowReports:    make([]Report, 1),
+		ruleEvaluator:  ruleEvaluator,
 	}
 }
 
@@ -58,7 +60,6 @@ type AggregatedFlow struct {
 }
 
 func (p *Processor) ProcessBucket(bucket []pkg.NetflowPacket) error {
-
 	mu := sync.Mutex{}
 
 	threads := runtime.GOMAXPROCS(0)
@@ -156,20 +157,19 @@ func (p *Processor) ProcessBucket(bucket []pkg.NetflowPacket) error {
 		f := flow
 		p.flowTrie.InsertMerge(&f, false)
 	}
+	go p.ReportFlowStats()
 	ipMap = nil
 	localMaps = nil
 	runtime.GC()
 	p.mu.Unlock()
 	p.sequence.Add(1)
 	if p.sequence.Load()%240 == 0 {
-
 		p.mu.Lock()
 		p.flowHistory.MergeTree(p.flowTrie)
 		p.flowTrie = NewFlowTrie()
 		p.sequence.Swap(0)
 		p.mu.Unlock()
 		go p.ReportHistoryStats()
-
 	}
 
 	return nil
@@ -197,73 +197,187 @@ type Report struct {
 }
 
 func (p *Processor) ReportHistoryStats() {
-	filters := make([]Filter, 0)
-
-	reports := make([]Report, 0)
-
 	history := p.flowHistory.WalkValues()
-	sampleFlow := history[0]
-	t := reflect.TypeOf(sampleFlow)
-	if t.Kind() == reflect.Pointer {
-		t = t.Elem()
+	if len(history) == 0 {
+		p.mu.Lock()
+		p.HistoryReports = nil
+		p.mu.Unlock()
+		return
 	}
-	for i := 0; i < t.NumField(); i++ {
-		field := t.Field(i)
-		filters = append(filters, NewFilter(field.Name, 10))
+
+	reports := make([]Report, 0, 17)
+
+	fields := []struct {
+		name string
+		kind reflect.Kind
+	}{
+		{"IP", reflect.Array},
+		{"ISP", reflect.Int},
+		{"Country", reflect.Int},
+		{"Direction", reflect.Int},
+		{"TCPPacketCount", reflect.Uint64},
+		{"TCPByteSum", reflect.Uint64},
+		{"UDPPacketCount", reflect.Uint64},
+		{"UDPByteSum", reflect.Uint64},
+		{"ICMPPacketCount", reflect.Uint64},
+		{"ICMPByteSum", reflect.Uint64},
+		{"TCPPacketCountUniformed", reflect.Float64},
+		{"TCPByteSumUniformed", reflect.Float64},
+		{"UDPPacketCountUniformed", reflect.Float64},
+		{"UDPByteSumUniformed", reflect.Float64},
+		{"ICMPPacketCountUniformed", reflect.Float64},
+		{"ICMPByteSumUniformed", reflect.Float64},
+		{"Sequence", reflect.Int},
 	}
-	mu := sync.Mutex{}
-	wg := sync.WaitGroup{}
-	for _, filter := range filters {
-		val := reflect.ValueOf(sampleFlow).Elem().FieldByName(filter.Field)
-		if !val.IsValid() {
-			continue
-		}
-		wg.Go(func() {
-			historyCp := make([]*AggregatedFlow, len(history))
-			copy(historyCp, history)
-			switch val.Kind() {
-			case reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-				sort.Slice(historyCp, func(i, j int) bool {
-					vi := reflect.ValueOf(historyCp[i]).Elem().FieldByName(filter.Field)
-					vj := reflect.ValueOf(historyCp[j]).Elem().FieldByName(filter.Field)
-					return vi.Uint() > vj.Uint()
+
+	var wg sync.WaitGroup
+	wg.Add(len(fields))
+	results := make(chan Report, len(fields))
+
+	for _, f := range fields {
+		go func(name string, kind reflect.Kind) {
+			defer wg.Done()
+
+			cp := make([]*AggregatedFlow, len(history))
+			copy(cp, history)
+
+			switch kind {
+			case reflect.Uint64, reflect.Int:
+				sort.Slice(cp, func(i, j int) bool {
+					return getFieldUint(cp[i], name) > getFieldUint(cp[j], name)
 				})
 			case reflect.Float64:
-				sort.Slice(historyCp, func(i, j int) bool {
-					vi := reflect.ValueOf(historyCp[i]).Elem().FieldByName(filter.Field)
-					vj := reflect.ValueOf(historyCp[j]).Elem().FieldByName(filter.Field)
-					return vi.Float() > vj.Float()
+				sort.Slice(cp, func(i, j int) bool {
+					return getFieldFloat(cp[i], name) > getFieldFloat(cp[j], name)
 				})
-			case reflect.Int8, reflect.Array:
-				sort.Slice(historyCp, func(i, j int) bool {
-
-					viTcp := reflect.ValueOf(historyCp[i]).Elem().FieldByName("TCPPacketCount")
-					viUdp := reflect.ValueOf(historyCp[i]).Elem().FieldByName("UDPPacketCount")
-					viIcmp := reflect.ValueOf(historyCp[i]).Elem().FieldByName("ICMPPacketCount")
-					vi := viTcp.Uint() + viUdp.Uint() + viIcmp.Uint()
-
-					vjTcp := reflect.ValueOf(historyCp[j]).Elem().FieldByName("TCPPacketCount")
-					vjUdp := reflect.ValueOf(historyCp[j]).Elem().FieldByName("UDPPacketCount")
-					vjIcmp := reflect.ValueOf(historyCp[j]).Elem().FieldByName("ICMPPacketCount")
-					vj := vjTcp.Uint() + vjUdp.Uint() + vjIcmp.Uint()
-
-					return vi > vj
+			case reflect.Array:
+				sort.Slice(cp, func(i, j int) bool {
+					return getTotalPackets(cp[i]) > getTotalPackets(cp[j])
 				})
 			}
-			mu.Lock()
-			count := min(filter.Count, len(historyCp))
-			top := historyCp[:count]
-			reports = append(reports, Report{
-				FilterName: filter.Field,
-				Results:    top,
-			})
-			mu.Unlock()
-		})
+
+			n := min(10, len(cp))
+			results <- Report{FilterName: name, Results: cp[:n]}
+		}(f.name, f.kind)
 	}
-	wg.Wait()
-	p.mu.RLock()
-	p.Reports = reports
-	p.mu.RUnlock()
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	for r := range results {
+		reports = append(reports, r)
+	}
+
+	p.mu.Lock()
+	p.HistoryReports = reports
+	p.mu.Unlock()
+}
+
+func (p *Processor) ReportFlowStats() {
+	history := p.flowTrie.WalkValues()
+	if len(history) == 0 {
+		p.mu.Lock()
+		p.FlowReports = nil
+		p.mu.Unlock()
+		return
+	}
+
+	reports := make([]Report, 0, 17)
+
+	fields := []struct {
+		name string
+		kind reflect.Kind
+	}{
+		{"IP", reflect.Array},
+		{"ISP", reflect.Int},
+		{"Country", reflect.Int},
+		{"Direction", reflect.Int},
+		{"TCPPacketCount", reflect.Uint64},
+		{"TCPByteSum", reflect.Uint64},
+		{"UDPPacketCount", reflect.Uint64},
+		{"UDPByteSum", reflect.Uint64},
+		{"ICMPPacketCount", reflect.Uint64},
+		{"ICMPByteSum", reflect.Uint64},
+		{"TCPPacketCountUniformed", reflect.Float64},
+		{"TCPByteSumUniformed", reflect.Float64},
+		{"UDPPacketCountUniformed", reflect.Float64},
+		{"UDPByteSumUniformed", reflect.Float64},
+		{"ICMPPacketCountUniformed", reflect.Float64},
+		{"ICMPByteSumUniformed", reflect.Float64},
+		{"Sequence", reflect.Int},
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(len(fields))
+	results := make(chan Report, len(fields))
+
+	for _, f := range fields {
+		go func(name string, kind reflect.Kind) {
+			defer wg.Done()
+
+			cp := make([]*AggregatedFlow, len(history))
+			copy(cp, history)
+
+			switch kind {
+			case reflect.Uint64, reflect.Int:
+				sort.Slice(cp, func(i, j int) bool {
+					return getFieldUint(cp[i], name) > getFieldUint(cp[j], name)
+				})
+			case reflect.Float64:
+				sort.Slice(cp, func(i, j int) bool {
+					return getFieldFloat(cp[i], name) > getFieldFloat(cp[j], name)
+				})
+			case reflect.Array:
+				sort.Slice(cp, func(i, j int) bool {
+					return getTotalPackets(cp[i]) > getTotalPackets(cp[j])
+				})
+			}
+
+			n := min(10, len(cp))
+			results <- Report{FilterName: name, Results: cp[:n]}
+		}(f.name, f.kind)
+	}
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	for r := range results {
+		reports = append(reports, r)
+	}
+
+	p.mu.Lock()
+	p.FlowReports = reports
+	p.mu.Unlock()
+}
+
+func getFieldUint(f *AggregatedFlow, field string) uint64 {
+	v := reflect.ValueOf(f).Elem().FieldByName(field)
+	if v.IsValid() && v.Kind() == reflect.Uint64 {
+		return v.Uint()
+	}
+	if v.IsValid() && (v.Kind() == reflect.Int || v.Kind() == reflect.Int32 || v.Kind() == reflect.Int64) {
+		return uint64(v.Int())
+	}
+	return 0
+}
+
+func getFieldFloat(f *AggregatedFlow, field string) float64 {
+	v := reflect.ValueOf(f).Elem().FieldByName(field)
+	if v.IsValid() && v.Kind() == reflect.Float64 {
+		return v.Float()
+	}
+	return 0
+}
+
+func getTotalPackets(f *AggregatedFlow) uint64 {
+	v := reflect.ValueOf(f).Elem()
+	return v.FieldByName("TCPPacketCount").Uint() +
+		v.FieldByName("UDPPacketCount").Uint() +
+		v.FieldByName("ICMPPacketCount").Uint()
 }
 
 func (p *Processor) ReportCandidateFlows() []CandidateFlow {
@@ -326,4 +440,9 @@ func (p *Processor) GetStats() FlowStats {
 		UDPBytes,
 		ICMPBytes,
 	}
+}
+func (p *Processor) GetFlowReports() []Report {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.FlowReports
 }
