@@ -60,31 +60,32 @@ type AggregatedFlow struct {
 }
 
 func (p *Processor) ProcessBucket(bucket []pkg.NetflowPacket) FlowStats {
-	mu := sync.Mutex{}
-
 	threads := runtime.GOMAXPROCS(0)
 	n := len(bucket)
+	if n == 0 {
+		return FlowStats{}
+	}
 	chunkSize := (n + threads - 1) / threads
 	chunks := make([][]pkg.NetflowPacket, 0, threads)
-
 	for i := 0; i < n; i += chunkSize {
 		j := min(i+chunkSize, n)
 		chunks = append(chunks, bucket[i:j])
-	} // balanced junk sizes
-	ipMap := NewFlowTrie()
+	}
 
-	wg := sync.WaitGroup{}
-	for _, chunk := range chunks {
-		// agg chunk in local thread ip map and then merge ipMaps of each thread
-		wg.Go(func() {
-			localMap := NewFlowTrie()
+	localMaps := make([]*FlowTrie, len(chunks))
+	var wg sync.WaitGroup
+	wg.Add(len(chunks))
+
+	for idx, chunk := range chunks {
+		go func(idx int, chunk []pkg.NetflowPacket) {
+			defer wg.Done()
+			local := NewFlowTrie()
 			for _, item := range chunk {
 				ip, err := ParseIp(item.IP)
 				if err != nil {
 					continue
 				}
-				existing := localMap.Lookup(ip)
-
+				existing := local.Lookup(ip)
 				ispIndex := pkg.GetIspIndex(item.ISP)
 				if ispIndex == -1 {
 					ispIndex = pkg.AddIsp(item.ISP)
@@ -93,12 +94,12 @@ func (p *Processor) ProcessBucket(bucket []pkg.NetflowPacket) FlowStats {
 				if countryIndex == -1 {
 					countryIndex = pkg.AddCountry(item.Country)
 				}
-				direction := int(0)
+				direction := 0
 				if item.Direction == "OUT" {
 					direction = 1
 				}
 				entry := AggregatedFlow{
-					IP:        ip, // make the string ip a 16 byte array
+					IP:        ip,
 					ISP:       ispIndex,
 					Country:   countryIndex,
 					Direction: direction,
@@ -115,7 +116,7 @@ func (p *Processor) ProcessBucket(bucket []pkg.NetflowPacket) FlowStats {
 					entry.ICMPByteSum = uint64(item.ByteSum)
 				}
 				if existing == nil {
-					localMap.InsertMerge(&entry, false)
+					local.InsertMerge(&entry, false)
 				} else {
 					existing.TCPPacketCount += entry.TCPPacketCount
 					existing.TCPByteSum += entry.TCPByteSum
@@ -125,24 +126,24 @@ func (p *Processor) ProcessBucket(bucket []pkg.NetflowPacket) FlowStats {
 					existing.ICMPByteSum += entry.ICMPByteSum
 				}
 			}
-			mu.Lock()
-			ipMap.MergeTree(localMap, false)
-			mu.Unlock()
-		})
+			localMaps[idx] = local
+		}(idx, chunk)
 	}
 	wg.Wait()
-	// merge localMaps into global ipMap
 
-	// lock the heap buckets, merge with local aggregated flows and increase the sequence
+	ipMap := NewFlowTrie()
+	for _, local := range localMaps {
+		ipMap.MergeTree(local, false)
+	}
+
 	p.mu.Lock()
 	flows := ipMap.WalkValues()
 	TCPPackets, UDPPackets, ICMPPackets, TCPBytes, UDPBytes, ICMPBytes := sumAggregatedFlows(flows)
 
 	p.flowTrie.MergeTree(ipMap, false)
 	go p.ReportFlowStats()
-	ipMap = nil
-	runtime.GC()
 	p.mu.Unlock()
+
 	p.sequence.Add(1)
 	if p.sequence.Load()%240 == 0 {
 		p.mu.Lock()

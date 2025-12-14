@@ -15,4 +15,11 @@ current dashboards:
 
 v1 image:
 
-![Alt text](./.github/v1_demo.png)
+![v1](./.github/v1_demo.png)
+
+
+multi window update:
+
+![v2](./.github/usage_chart.png)
+![v2](./.github/flow_chart.png)
+![v2](./.github/top_flows.png)

@@ -25,7 +25,7 @@ import (
 	"netflow-reporter/pkg"
 )
 
-const maxPoints = 120
+const maxPoints = 8
 
 type safeStats struct {
 	mu       sync.RWMutex
@@ -44,6 +44,7 @@ type viewMode int
 const (
 	viewCharts viewMode = iota
 	viewReports
+	viewResources
 )
 
 func main() {
@@ -65,6 +66,19 @@ func main() {
 	lcPackets, err := linechart.New(
 		linechart.AxesCellOpts(cell.FgColor(cell.ColorWhite)),
 		linechart.YAxisAdaptive(),
+		linechart.YAxisFormattedValues(func(v float64) string {
+
+			if v < 1e6 && v > 1000 {
+				return fmt.Sprintf("%.0fK", v/1e3)
+			}
+			if v < 1e9 && v > 1e6 {
+				return fmt.Sprintf("%.0fM", v/1e6)
+			}
+			if v > 1e9 {
+				return fmt.Sprintf("%.1fB", v/1e9)
+			}
+			return fmt.Sprintf("%.0f", v)
+		}),
 		linechart.YLabelCellOpts(cell.FgColor(cell.ColorWhite)),
 		linechart.XLabelCellOpts(cell.FgColor(cell.ColorWhite)),
 	)
@@ -73,6 +87,37 @@ func main() {
 	}
 
 	lcBytes, err := linechart.New(
+		linechart.AxesCellOpts(cell.FgColor(cell.ColorWhite)),
+		linechart.YAxisAdaptive(),
+		linechart.YAxisFormattedValues(func(v float64) string {
+			if v > 1024*1024 {
+				return fmt.Sprintf("%.2f mb/s", v/1024/1024)
+			} else if v > 1024*1024*1024 {
+				return fmt.Sprintf("%.2f GB/s", v/1024/1024/1024)
+			} else if v > 1024*1024*1024*1024 {
+				return fmt.Sprintf("%.2f TB/s", v/1024/1024/1024/1024)
+			} else {
+				return fmt.Sprintf("%.2f Byte/s", v)
+			}
+		}),
+		linechart.YLabelCellOpts(cell.FgColor(cell.ColorWhite)),
+		linechart.XLabelCellOpts(cell.FgColor(cell.ColorWhite)),
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	lcHeap, err := linechart.New(
+		linechart.AxesCellOpts(cell.FgColor(cell.ColorWhite)),
+		linechart.YAxisAdaptive(),
+		linechart.YLabelCellOpts(cell.FgColor(cell.ColorWhite)),
+		linechart.XLabelCellOpts(cell.FgColor(cell.ColorWhite)),
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	lcGoroutines, err := linechart.New(
 		linechart.AxesCellOpts(cell.FgColor(cell.ColorWhite)),
 		linechart.YAxisAdaptive(),
 		linechart.YLabelCellOpts(cell.FgColor(cell.ColorWhite)),
@@ -100,8 +145,11 @@ func main() {
 	bpsUDPHist := make([]float64, 0, maxPoints)
 	bpsICMPHist := make([]float64, 0, maxPoints)
 
+	heapHist := make([]float64, 0, maxPoints)
+	goroutineHist := make([]float64, 0, maxPoints)
+
 	go func() {
-		ticker := time.NewTicker(15 * time.Second)
+		ticker := time.NewTicker(1 * time.Second)
 		defer ticker.Stop()
 
 		for {
@@ -109,11 +157,36 @@ func main() {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				bucket := queue.Dequeue()
-				if bucket == nil {
-					continue
+
+				routines, heapusage := internal.ReadUsage()
+
+				mu.Lock()
+				heapHist = append(heapHist, heapusage/1024/1024)
+				goroutineHist = append(goroutineHist, float64(routines))
+
+				if len(heapHist) > maxPoints {
+					heapHist = heapHist[len(heapHist)-maxPoints:]
+					goroutineHist = goroutineHist[len(goroutineHist)-maxPoints:]
 				}
-				if len(bucket) == 0 {
+				mu.Unlock()
+
+				lcHeap.Series("Heap (MB)", heapHist, linechart.SeriesCellOpts(cell.FgColor(cell.ColorYellow)))
+				lcGoroutines.Series("Goroutines", goroutineHist, linechart.SeriesCellOpts(cell.FgColor(cell.ColorMagenta)))
+
+			}
+		}
+	}()
+
+	go func() {
+		tk := time.NewTicker(15 * time.Second)
+		defer tk.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tk.C:
+				bucket := queue.Dequeue()
+				if bucket == nil || len(bucket) == 0 {
 					continue
 				}
 				current := processor.ProcessBucket(bucket)
@@ -126,7 +199,6 @@ func main() {
 						rates.ppsTCP = float64(current.TCPPackets-rates.prev.TCPPackets) / dt
 						rates.ppsUDP = float64(current.UDPPackets-rates.prev.UDPPackets) / dt
 						rates.ppsICMP = float64(current.ICMPPackets-rates.prev.ICMPPackets) / dt
-
 						rates.bpsTCP = float64(current.TCPBytes-rates.prev.TCPBytes) / dt
 						rates.bpsUDP = float64(current.UDPBytes-rates.prev.UDPBytes) / dt
 						rates.bpsICMP = float64(current.ICMPBytes-rates.prev.ICMPBytes) / dt
@@ -155,16 +227,15 @@ func main() {
 				}
 				mu.Unlock()
 
-				offset := 1.0
+				offset := 5.0
 
-				lcPackets.Series("TCP", offsetSlice(ppsTCPHist, +offset*2), linechart.SeriesCellOpts(cell.FgColor(cell.ColorNumber(196))))
-				lcPackets.Series("UDP", offsetSlice(ppsUDPHist, 0), linechart.SeriesCellOpts(cell.FgColor(cell.ColorNumber(46))))
 				lcPackets.Series("ICMP", offsetSlice(ppsICMPHist, -offset*2), linechart.SeriesCellOpts(cell.FgColor(cell.ColorNumber(21))))
+				lcPackets.Series("TCP", offsetSlice(ppsTCPHist, 0), linechart.SeriesCellOpts(cell.FgColor(cell.ColorNumber(196))))
+				lcPackets.Series("UDP", offsetSlice(ppsUDPHist, +offset*2), linechart.SeriesCellOpts(cell.FgColor(cell.ColorNumber(46))))
 
-				lcBytes.Series("TCP", offsetSlice(bpsTCPHist, +offset*2), linechart.SeriesCellOpts(cell.FgColor(cell.ColorNumber(196))))
-				lcBytes.Series("UDP", offsetSlice(bpsUDPHist, 0), linechart.SeriesCellOpts(cell.FgColor(cell.ColorNumber(46))))
 				lcBytes.Series("ICMP", offsetSlice(bpsICMPHist, -offset*2), linechart.SeriesCellOpts(cell.FgColor(cell.ColorNumber(21))))
-
+				lcBytes.Series("TCP", offsetSlice(bpsTCPHist, 0), linechart.SeriesCellOpts(cell.FgColor(cell.ColorNumber(196))))
+				lcBytes.Series("UDP", offsetSlice(bpsUDPHist, +offset*2), linechart.SeriesCellOpts(cell.FgColor(cell.ColorNumber(46))))
 				reports := processor.GetFlowReports()
 				if len(reports) == 0 {
 					reportText.Reset()
@@ -172,11 +243,9 @@ func main() {
 				} else {
 					reportText.Reset()
 					reportText.Write("Top Flows Reports\n\n", text.WriteCellOpts(cell.FgColor(cell.ColorWhite), cell.Bold()))
-
 					for _, r := range reports {
 						reportText.Write(fmt.Sprintf("≡ %s (Top %d)\n", r.FilterName, len(r.Results)),
 							text.WriteCellOpts(cell.FgColor(cell.ColorCyan), cell.Bold()))
-
 						for i, flow := range r.Results {
 							ip := net.IP(flow.IP[:])
 							totalPkts := flow.TCPPacketCount + flow.UDPPacketCount + flow.ICMPPacketCount
@@ -185,7 +254,7 @@ func main() {
 							if flow.Direction == 1 {
 								direction = "outgoing"
 							}
-							line := fmt.Sprintf("%2d. IP: %s | Pkts: %s | Bytes: %s | ISP: %s | Country: %s | Direction: %s",
+							line := fmt.Sprintf("%2d. IP: %s | Pkts: %s | Bytes: %s | ISP: %s | Country: %s | Dir: %s",
 								i+1,
 								ip.String(),
 								formatNumber(totalPkts),
@@ -193,7 +262,6 @@ func main() {
 								pkg.GetIspName(flow.ISP),
 								pkg.GetCountryName(flow.Country),
 								direction)
-
 							reportText.Write(line + "\n")
 						}
 						reportText.Write("\n")
@@ -205,8 +273,9 @@ func main() {
 
 	updateContainer := func(c *container.Container) error {
 		builder := grid.New()
-		if currentView == viewCharts {
 
+		switch currentView {
+		case viewCharts:
 			builder.Add(
 				grid.RowHeightPerc(50,
 					grid.Widget(lcPackets,
@@ -219,12 +288,25 @@ func main() {
 						container.BorderColor(cell.ColorRed),
 						container.BorderTitle(" Traffic (GB/s) "))),
 			)
-		} else {
+		case viewReports:
 			builder.Add(
 				grid.Widget(reportText,
 					container.Border(linestyle.Round),
 					container.BorderColor(cell.ColorCyan),
 					container.BorderTitle(" Top Flows Reports ")))
+		case viewResources:
+			builder.Add(
+				grid.RowHeightPerc(50,
+					grid.Widget(lcHeap,
+						container.Border(linestyle.Round),
+						container.BorderColor(cell.ColorYellow),
+						container.BorderTitle(" Heap Memory Usage (MB) "))),
+				grid.RowHeightPerc(50,
+					grid.Widget(lcGoroutines,
+						container.Border(linestyle.Round),
+						container.BorderColor(cell.ColorMagenta),
+						container.BorderTitle(" Goroutine Count "))),
+			)
 		}
 
 		opts, err := builder.Build()
@@ -238,7 +320,7 @@ func main() {
 	c, err := container.New(t,
 		container.ID("root"),
 		container.Border(linestyle.Light),
-		container.BorderTitle(" NetFlow Dashboard - ← → to switch views | q to quit "),
+		container.BorderTitle(" NetFlow Dashboard - ← → to cycle views | q to quit "),
 	)
 	if err != nil {
 		panic(err)
@@ -251,14 +333,10 @@ func main() {
 		termdash.KeyboardSubscriber(func(k *terminalapi.Keyboard) {
 			switch k.Key {
 			case keyboard.KeyArrowLeft, keyboard.KeyArrowRight:
-				if currentView == viewCharts {
-					currentView = viewReports
-				} else {
-					currentView = viewCharts
-				}
+				currentView = (currentView + 1) % 3
 				updateContainer(c)
 			case 'q', 'Q', keyboard.KeyCtrlC, keyboard.KeyCtrlQ:
-				os.Exit(1)
+				os.Exit(0)
 			}
 		}),
 	); err != nil {
