@@ -27,7 +27,7 @@ func main() {
 
 	go func() {
 		for {
-			batch_size := 100_000 + time.Now().UnixNano()%1_000_000
+			batch_size := 10_000 + time.Now().UnixNano()%100_000
 
 			batch := make([]pkg.NetflowPacket, 0, batch_size)
 			for range batch_size {
@@ -37,7 +37,7 @@ func main() {
 					ISP:       pkg.GetRandISP(),
 					Country:   pkg.GetRandCountry(),
 					Direction: pkg.GetRandDirection(),
-					ByteSum:   time.Now().UnixNano() % 100_000,
+					ByteSum:   time.Now().UnixNano() % 10_000,
 				})
 			}
 			data, err := pkg.MarshalNetflowBatch(batch)

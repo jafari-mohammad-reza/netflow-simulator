@@ -136,20 +136,7 @@ func (p *Processor) ProcessBucket(bucket []pkg.NetflowPacket) FlowStats {
 	// lock the heap buckets, merge with local aggregated flows and increase the sequence
 	p.mu.Lock()
 	flows := ipMap.WalkValues()
-	TCPPackets := uint64(0)
-	UDPPackets := uint64(0)
-	ICMPPackets := uint64(0)
-	TCPBytes := uint64(0)
-	UDPBytes := uint64(0)
-	ICMPBytes := uint64(0)
-	for _, flow := range flows {
-		TCPPackets += flow.TCPPacketCount
-		UDPPackets += flow.UDPPacketCount
-		ICMPPackets += flow.ICMPPacketCount
-		TCPBytes += flow.TCPByteSum
-		UDPBytes += flow.UDPByteSum
-		ICMPBytes += flow.ICMPByteSum
-	}
+	TCPPackets, UDPPackets, ICMPPackets, TCPBytes, UDPBytes, ICMPBytes := sumAggregatedFlows(flows)
 
 	p.flowTrie.MergeTree(ipMap, false)
 	go p.ReportFlowStats()
@@ -174,6 +161,83 @@ func (p *Processor) ProcessBucket(bucket []pkg.NetflowPacket) FlowStats {
 		UDPBytes,
 		ICMPBytes,
 	}
+}
+
+func sumAggregatedFlows(flows []*AggregatedFlow) (tcpPkt, udpPkt, icmpPkt, tcpBytes, udpBytes, icmpBytes uint64) {
+	if len(flows) == 0 {
+		return
+	}
+
+	numCPU := runtime.NumCPU()
+	chunkSize := (len(flows) + numCPU - 1) / numCPU
+
+	type partial struct {
+		tcpPkt, udpPkt, icmpPkt uint64
+		tcpB, udpB, icmpB       uint64
+	}
+
+	partials := make([]partial, numCPU)
+
+	var wg sync.WaitGroup
+	wg.Add(numCPU)
+
+	for i := range numCPU {
+		start := i * chunkSize
+		end := min(start+chunkSize, len(flows))
+		if start >= end {
+			wg.Done()
+			continue
+		}
+
+		go func(idx int, flows []*AggregatedFlow) {
+			defer wg.Done()
+			var p partial
+			f := flows
+
+			for j := 0; j < len(f); j += 4 {
+				if j+3 < len(f) {
+					f0 := f[j+0]
+					f1 := f[j+1]
+					f2 := f[j+2]
+					f3 := f[j+3]
+
+					p.tcpPkt += f0.TCPPacketCount + f1.TCPPacketCount + f2.TCPPacketCount + f3.TCPPacketCount
+					p.udpPkt += f0.UDPPacketCount + f1.UDPPacketCount + f2.UDPPacketCount + f3.UDPPacketCount
+					p.icmpPkt += f0.ICMPPacketCount + f1.ICMPPacketCount + f2.ICMPPacketCount + f3.ICMPPacketCount
+
+					p.tcpB += f0.TCPByteSum + f1.TCPByteSum + f2.TCPByteSum + f3.TCPByteSum
+					p.udpB += f0.UDPByteSum + f1.UDPByteSum + f2.UDPByteSum + f3.UDPByteSum
+					p.icmpB += f0.ICMPByteSum + f1.ICMPByteSum + f2.ICMPByteSum + f3.ICMPByteSum
+				} else {
+
+					for ; j < len(f); j++ {
+						flow := f[j]
+						p.tcpPkt += flow.TCPPacketCount
+						p.udpPkt += flow.UDPPacketCount
+						p.icmpPkt += flow.ICMPPacketCount
+						p.tcpB += flow.TCPByteSum
+						p.udpB += flow.UDPByteSum
+						p.icmpB += flow.ICMPByteSum
+					}
+				}
+			}
+
+			partials[idx] = p
+		}(i, flows[start:end])
+	}
+
+	wg.Wait()
+
+	for _, part := range partials {
+		tcpPkt += part.tcpPkt
+		udpPkt += part.udpPkt
+		icmpPkt += part.icmpPkt
+		tcpBytes += part.tcpB
+		udpBytes += part.udpB
+		icmpBytes += part.icmpB
+	}
+
+	return
 }
 
 type Filter struct {
@@ -419,20 +483,7 @@ type FlowStats struct {
 
 func (p *Processor) GetStats() FlowStats {
 	flows := p.flowTrie.WalkValues()
-	TCPPackets := uint64(0)
-	UDPPackets := uint64(0)
-	ICMPPackets := uint64(0)
-	TCPBytes := uint64(0)
-	UDPBytes := uint64(0)
-	ICMPBytes := uint64(0)
-	for _, flow := range flows {
-		TCPPackets += flow.TCPPacketCount
-		UDPPackets += flow.UDPPacketCount
-		ICMPPackets += flow.ICMPPacketCount
-		TCPBytes += flow.TCPByteSum
-		UDPBytes += flow.UDPByteSum
-		ICMPBytes += flow.ICMPByteSum
-	}
+	TCPPackets, UDPPackets, ICMPPackets, TCPBytes, UDPBytes, ICMPBytes := sumAggregatedFlows(flows)
 	return FlowStats{
 		TCPPackets,
 		UDPPackets,

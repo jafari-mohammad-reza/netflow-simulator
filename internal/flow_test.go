@@ -419,3 +419,106 @@ func mustCompile(t *testing.T, exprStr string) *vm.Program {
 	}
 	return prog
 }
+
+func TestSumAggregatedFlows(t *testing.T) {
+	flows := make([]*AggregatedFlow, 0, 1_000_000)
+	for i := range 1_000_000 {
+		ipBytes := [16]byte{}
+		copy(ipBytes[:], []byte{byte(i % 256), byte((i / 256) % 256)})
+
+		flow := &AggregatedFlow{
+			IP:              ipBytes,
+			ISP:             int(i % 5),
+			Country:         int(i % 10),
+			Direction:       int(i % 2),
+			TCPPacketCount:  uint64(i * 3),
+			TCPByteSum:      uint64(i * 10),
+			UDPPacketCount:  uint64(i * 2),
+			UDPByteSum:      uint64(i * 5),
+			ICMPPacketCount: uint64(i),
+			ICMPByteSum:     uint64(i * 2),
+			Sequence:        i,
+		}
+		flows = append(flows, flow)
+	}
+
+	tcpPkt, udpPkt, icmpPkt, tcpBytes, udpBytes, icmpBytes := sumAggregatedFlows(flows)
+	flowtcpPkt := uint64(0)
+	flowudpPkt := uint64(0)
+	flowicmpPkt := uint64(0)
+	flowtcpBytes := uint64(0)
+	flowudpBytes := uint64(0)
+	flowicmpBytes := uint64(0)
+	for _, flow := range flows {
+		flowtcpPkt += flow.TCPPacketCount
+		flowudpPkt += flow.UDPPacketCount
+		flowicmpPkt += flow.ICMPPacketCount
+		flowtcpBytes += flow.TCPByteSum
+		flowudpBytes += flow.UDPByteSum
+		flowicmpBytes += flow.ICMPByteSum
+	}
+	if tcpPkt == 0 {
+		t.Fatalf("tcpPkt is zero")
+	}
+	if tcpPkt != flowtcpPkt {
+		t.Fatalf("tcpPkt != flowtcpPkt: %d-%d", tcpPkt, flowtcpPkt)
+	}
+	if udpPkt == 0 {
+		t.Fatalf("udpPkt is zero")
+	}
+	if udpPkt != flowudpPkt {
+		t.Fatalf("udpPkt != flowudpPkt: %d-%d", udpPkt, flowudpPkt)
+	}
+	if icmpPkt == 0 {
+		t.Fatalf("icmpPkt is zero")
+	}
+	if icmpPkt != flowicmpPkt {
+		t.Fatalf("icmpPkt != flowicmpPkt: %d-%d", icmpPkt, flowicmpPkt)
+	}
+	if tcpBytes == 0 {
+		t.Fatalf("tcpBytes is zero")
+	}
+	if tcpBytes != flowtcpBytes {
+		t.Fatalf("tcpBytes != flowtcpBytes: %d-%d", tcpBytes, flowtcpBytes)
+	}
+	if udpBytes == 0 {
+		t.Fatalf("udpBytes is zero")
+	}
+	if udpBytes != flowudpBytes {
+		t.Fatalf("udpBytes != flowudpBytes: %d-%d", udpBytes, flowudpBytes)
+	}
+	if icmpBytes == 0 {
+		t.Fatalf("icmpBytes is zero")
+	}
+	if icmpBytes != flowicmpBytes {
+		t.Fatalf("icmpBytes != flowicmpBytes: %d-%d", icmpBytes, flowicmpBytes)
+	}
+}
+func BenchmarkSumAggregatedFlows(b *testing.B) {
+	b.ReportAllocs()
+	flows := make([]*AggregatedFlow, 0, 1_000_000)
+	for i := range 1_000_000 {
+		ipBytes := [16]byte{}
+		copy(ipBytes[:], []byte{byte(i % 256), byte((i / 256) % 256)})
+
+		flow := &AggregatedFlow{
+			IP:              ipBytes,
+			ISP:             int(i % 5),
+			Country:         int(i % 10),
+			Direction:       int(i % 2),
+			TCPPacketCount:  uint64(i * 3),
+			TCPByteSum:      uint64(i * 10),
+			UDPPacketCount:  uint64(i * 2),
+			UDPByteSum:      uint64(i * 5),
+			ICMPPacketCount: uint64(i),
+			ICMPByteSum:     uint64(i * 2),
+			Sequence:        i,
+		}
+		flows = append(flows, flow)
+	}
+	b.ResetTimer()
+	for b.Loop() {
+		sumAggregatedFlows(flows)
+	}
+
+}
