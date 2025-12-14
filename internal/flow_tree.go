@@ -175,72 +175,77 @@ func (t *FlowTrie) InsertMerge(flow *AggregatedFlow, isMerge bool) {
 				dirLeft = false
 				cur = in.right.Load()
 			}
+			if isMerge {
+
+				TCPPacketCountUniformed := float64(flow.TCPPacketCount) / 240 / 15 // an hour is 240 15-second intervals
+				TCPByteSumUniformed := float64(flow.TCPByteSum) / 240 / 15
+				UDPPacketCountUniformed := float64(flow.UDPPacketCount) / 240 / 15
+				UDPByteSumUniformed := float64(flow.UDPByteSum) / 240 / 15
+				ICMPPacketCountUniformed := float64(flow.ICMPPacketCount) / 240 / 15
+				ICMPByteSumUniformed := float64(flow.ICMPByteSum) / 240 / 15
+
+				if flow.Sequence > 1 {
+					flow.TCPPacketCountUniformed = ((TCPPacketCountUniformed * 2) + flow.TCPPacketCountUniformed) / 3
+					flow.TCPByteSumUniformed = ((TCPByteSumUniformed * 2) + flow.TCPByteSumUniformed) / 3
+					flow.UDPPacketCountUniformed = ((UDPPacketCountUniformed * 2) + flow.UDPPacketCountUniformed) / 3
+					flow.UDPByteSumUniformed = ((UDPByteSumUniformed * 2) + flow.UDPByteSumUniformed) / 3
+					flow.ICMPPacketCountUniformed = ((ICMPPacketCountUniformed * 2) + flow.ICMPPacketCountUniformed) / 3
+					flow.ICMPByteSumUniformed = ((ICMPByteSumUniformed * 2) + flow.ICMPByteSumUniformed) / 3
+				} else {
+					flow.TCPPacketCountUniformed = TCPPacketCountUniformed
+					flow.TCPByteSumUniformed = TCPByteSumUniformed
+					flow.UDPPacketCountUniformed = UDPPacketCountUniformed
+					flow.UDPByteSumUniformed = UDPByteSumUniformed
+					flow.ICMPPacketCountUniformed = ICMPPacketCountUniformed
+					flow.ICMPByteSumUniformed = ICMPByteSumUniformed
+				}
+
+				flow.TCPPacketCount = 0
+				flow.TCPByteSum = 0
+				flow.UDPPacketCount = 0
+				flow.UDPByteSum = 0
+				flow.ICMPPacketCount = 0
+				flow.ICMPByteSum = 0
+				flow.Sequence += 1
+			}
 			if cur == nil {
+
 				newNode := (*anyNode)(unsafe.Pointer(newLeaf(flowCopy(flow))))
 				if parentPtr.CompareAndSwap(nil, newNode) {
 					return
 				}
+
 				break
 			}
 		}
 
 		leaf := asLeaf(cur)
 		if leaf == nil || leaf.data == nil {
+
 			continue
 		}
 
 		if leaf.data.IP == flow.IP {
+
 			merged := flowCopy(leaf.data)
 			mergeInto(merged, flow)
-
-			if isMerge {
-				TCPPacketCountUniformed := float64(merged.TCPPacketCount) / 240 / 15
-				TCPByteSumUniformed := float64(merged.TCPByteSum) / 240 / 15
-				UDPPacketCountUniformed := float64(merged.UDPPacketCount) / 240 / 15
-				UDPByteSumUniformed := float64(merged.UDPByteSum) / 240 / 15
-				ICMPPacketCountUniformed := float64(merged.ICMPPacketCount) / 240 / 15
-				ICMPByteSumUniformed := float64(merged.ICMPByteSum) / 240 / 15
-
-				if merged.Sequence > 1 {
-					merged.TCPPacketCountUniformed = ((TCPPacketCountUniformed * 2) + merged.TCPPacketCountUniformed) / 3
-					merged.TCPByteSumUniformed = ((TCPByteSumUniformed * 2) + merged.TCPByteSumUniformed) / 3
-					merged.UDPPacketCountUniformed = ((UDPPacketCountUniformed * 2) + merged.UDPPacketCountUniformed) / 3
-					merged.UDPByteSumUniformed = ((UDPByteSumUniformed * 2) + merged.UDPByteSumUniformed) / 3
-					merged.ICMPPacketCountUniformed = ((ICMPPacketCountUniformed * 2) + merged.ICMPPacketCountUniformed) / 3
-					merged.ICMPByteSumUniformed = ((ICMPByteSumUniformed * 2) + merged.ICMPByteSumUniformed) / 3
-				} else {
-					merged.TCPPacketCountUniformed = TCPPacketCountUniformed
-					merged.TCPByteSumUniformed = TCPByteSumUniformed
-					merged.UDPPacketCountUniformed = UDPPacketCountUniformed
-					merged.UDPByteSumUniformed = UDPByteSumUniformed
-					merged.ICMPPacketCountUniformed = ICMPPacketCountUniformed
-					merged.ICMPByteSumUniformed = ICMPByteSumUniformed
-				}
-
-				merged.TCPPacketCount = 0
-				merged.TCPByteSum = 0
-				merged.UDPPacketCount = 0
-				merged.UDPByteSum = 0
-				merged.ICMPPacketCount = 0
-				merged.ICMPByteSum = 0
-				merged.Sequence += 1
-			}
-
-			newLeafNode := (*anyNode)(unsafe.Pointer(newLeaf(merged)))
+			newLeaf := (*anyNode)(unsafe.Pointer(newLeaf(merged)))
 
 			if parent == nil {
-				if t.root.CompareAndSwap(cur, newLeafNode) {
+
+				if t.root.CompareAndSwap(cur, newLeaf) {
 					return
 				}
+
 				continue
 			}
 
 			if dirLeft {
-				if parent.left.CompareAndSwap(cur, newLeafNode) {
+				if parent.left.CompareAndSwap(cur, newLeaf) {
 					return
 				}
 			} else {
-				if parent.right.CompareAndSwap(cur, newLeafNode) {
+				if parent.right.CompareAndSwap(cur, newLeaf) {
 					return
 				}
 			}
@@ -268,9 +273,11 @@ func (t *FlowTrie) InsertMerge(flow *AggregatedFlow, isMerge bool) {
 		newInternalAny := (*anyNode)(unsafe.Pointer(in))
 
 		if parent == nil {
+
 			if t.root.CompareAndSwap(cur, newInternalAny) {
 				return
 			}
+
 			continue
 		}
 
@@ -283,6 +290,7 @@ func (t *FlowTrie) InsertMerge(flow *AggregatedFlow, isMerge bool) {
 				return
 			}
 		}
+
 	}
 }
 
