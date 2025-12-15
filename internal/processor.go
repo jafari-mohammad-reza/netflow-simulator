@@ -139,7 +139,14 @@ func (p *Processor) ProcessBucket(bucket []pkg.NetflowPacket) FlowStats {
 	p.mu.Lock()
 	flows := ipMap.WalkValues()
 	TCPPackets, UDPPackets, ICMPPackets, TCPBytes, UDPBytes, ICMPBytes := sumAggregatedFlows(flows)
-
+	stats := FlowStats{
+		TCPPackets,
+		UDPPackets,
+		ICMPPackets,
+		TCPBytes,
+		UDPBytes,
+		ICMPBytes,
+	}
 	p.flowTrie.MergeTree(ipMap, false)
 	go p.ReportFlowStats()
 	p.mu.Unlock()
@@ -154,14 +161,7 @@ func (p *Processor) ProcessBucket(bucket []pkg.NetflowPacket) FlowStats {
 		go p.ReportHistoryStats()
 	}
 
-	return FlowStats{
-		TCPPackets,
-		UDPPackets,
-		ICMPPackets,
-		TCPBytes,
-		UDPBytes,
-		ICMPBytes,
-	}
+	return stats
 }
 
 func sumAggregatedFlows(flows []*AggregatedFlow) (tcpPkt, udpPkt, icmpPkt, tcpBytes, udpBytes, icmpBytes uint64) {
@@ -474,12 +474,12 @@ func ParseIp(ipStr string) ([16]byte, error) {
 }
 
 type FlowStats struct {
-	TCPPackets  uint64
-	UDPPackets  uint64
-	ICMPPackets uint64
-	TCPBytes    uint64
-	UDPBytes    uint64
-	ICMPBytes   uint64
+	TCPPackets  uint64 `json:"TCP_Packets"`
+	UDPPackets  uint64 `json:"UDP_Packets"`
+	ICMPPackets uint64 `json:"ICMP_Packets"`
+	TCPBytes    uint64 `json:"TCP_Bytes"`
+	UDPBytes    uint64 `json:"UDP_Bytes"`
+	ICMPBytes   uint64 `json:"ICMP_Bytes"`
 }
 
 func (p *Processor) GetStats() FlowStats {

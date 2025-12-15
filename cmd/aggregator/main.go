@@ -90,15 +90,16 @@ func main() {
 		linechart.AxesCellOpts(cell.FgColor(cell.ColorWhite)),
 		linechart.YAxisAdaptive(),
 		linechart.YAxisFormattedValues(func(v float64) string {
-			if v > 1024*1024 {
-				return fmt.Sprintf("%.2f mb/s", v/1024/1024)
-			} else if v > 1024*1024*1024 {
-				return fmt.Sprintf("%.2f GB/s", v/1024/1024/1024)
-			} else if v > 1024*1024*1024*1024 {
-				return fmt.Sprintf("%.2f TB/s", v/1024/1024/1024/1024)
-			} else {
-				return fmt.Sprintf("%.2f Byte/s", v)
+			if v >= 1024*1024*1024*1024 {
+				return fmt.Sprintf("%.2f TB/s", v/(1024*1024*1024*1024))
+			} else if v >= 1024*1024*1024 {
+				return fmt.Sprintf("%.2f GB/s", v/(1024*1024*1024))
+			} else if v >= 1024*1024 {
+				return fmt.Sprintf("%.2f MB/s", v/(1024*1024))
+			} else if v >= 1024 {
+				return fmt.Sprintf("%.2f KB/s", v/1024)
 			}
+			return fmt.Sprintf("%.0f B/s", v)
 		}),
 		linechart.YLabelCellOpts(cell.FgColor(cell.ColorWhite)),
 		linechart.XLabelCellOpts(cell.FgColor(cell.ColorWhite)),
@@ -227,15 +228,15 @@ func main() {
 				}
 				mu.Unlock()
 
-				offset := 5.0
+				offset := 10.0
 
 				lcPackets.Series("ICMP", offsetSlice(ppsICMPHist, -offset*2), linechart.SeriesCellOpts(cell.FgColor(cell.ColorNumber(21))))
-				lcPackets.Series("TCP", offsetSlice(ppsTCPHist, 0), linechart.SeriesCellOpts(cell.FgColor(cell.ColorNumber(196))))
-				lcPackets.Series("UDP", offsetSlice(ppsUDPHist, +offset*2), linechart.SeriesCellOpts(cell.FgColor(cell.ColorNumber(46))))
+				lcPackets.Series("UDP", offsetSlice(ppsUDPHist, 0), linechart.SeriesCellOpts(cell.FgColor(cell.ColorNumber(46))))
+				lcPackets.Series("TCP", offsetSlice(ppsTCPHist, +offset*2), linechart.SeriesCellOpts(cell.FgColor(cell.ColorNumber(196))))
 
 				lcBytes.Series("ICMP", offsetSlice(bpsICMPHist, -offset*2), linechart.SeriesCellOpts(cell.FgColor(cell.ColorNumber(21))))
-				lcBytes.Series("TCP", offsetSlice(bpsTCPHist, 0), linechart.SeriesCellOpts(cell.FgColor(cell.ColorNumber(196))))
-				lcBytes.Series("UDP", offsetSlice(bpsUDPHist, +offset*2), linechart.SeriesCellOpts(cell.FgColor(cell.ColorNumber(46))))
+				lcBytes.Series("UDP", offsetSlice(bpsUDPHist, 0), linechart.SeriesCellOpts(cell.FgColor(cell.ColorNumber(46))))
+				lcBytes.Series("TCP", offsetSlice(bpsTCPHist, +offset*2), linechart.SeriesCellOpts(cell.FgColor(cell.ColorNumber(196))))
 				reports := processor.GetFlowReports()
 				if len(reports) == 0 {
 					reportText.Reset()
